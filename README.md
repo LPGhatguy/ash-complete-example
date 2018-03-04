@@ -1,5 +1,5 @@
-# Ash Complete Example
-This is an incomplete example of how to use [Ash](https://github.com/MaikKlein/ash) without relying on any "helper" or "example base" code.
+# Ash Example Without Abstractions
+This is an **incomplete** example of how to use [Ash](https://github.com/MaikKlein/ash) without relying on any "helper" or "example base" code. It's a work in progress and should be updated as I work through Ash's existing examples.
 
 I've found that examples using hastily put-together abstractions tend to significantly obscure how to *actually* use a library in practice. Ash is guilty of this; I intend to submit a new set of examples back to Ash once they're up and working from this repository.
 
