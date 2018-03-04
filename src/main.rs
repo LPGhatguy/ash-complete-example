@@ -12,6 +12,10 @@ use ash::{Entry, Instance, Device, vk};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface};
 
+// A set of platform-specific instance extensions.
+//
+// I don't have another machine to test other implementations, so only a Windows
+// implementation is provided right now.
 #[cfg(all(windows))]
 fn extension_names() -> Vec<*const i8> {
     vec![
@@ -21,6 +25,8 @@ fn extension_names() -> Vec<*const i8> {
     ]
 }
 
+// Uses a platform specific extension to create a surface. Like the
+// extension_names() method, it's only implemented for Windows right now.
 #[cfg(windows)]
 fn create_surface(
     entry: &Entry<V1_0>,
@@ -52,6 +58,8 @@ fn create_surface(
     }
 }
 
+// The signature of this function is important -- we pass it to the debug
+// callback extension below.
 unsafe extern "system" fn vulkan_debug_callback(
     _flags: vk::DebugReportFlagsEXT,
     _obj_type: vk::DebugReportObjectTypeEXT,
@@ -69,16 +77,18 @@ unsafe extern "system" fn vulkan_debug_callback(
 fn main() {
     let (window_width, window_height) = (800, 600);
 
+    // Construct a regular winit events loop and window; nothing special here.
     let mut events_loop = winit::EventsLoop::new();
     let window = winit::WindowBuilder::new()
         .with_title("Try Ash")
         .with_dimensions(window_width, window_height)
         .build(&events_loop)
-        .unwrap();
+        .expect("Unable to construct winit window!");
 
     // 'Entry' implements a specific API version and automatically loads
     // function pointers for us.
-    let entry = Entry::<V1_0>::new().unwrap();
+    let entry = Entry::<V1_0>::new()
+        .expect("Unable to create Vulkan Entry!");
 
     // Vulkan requires us to specify an app and engine name, so we use the same
     // one for both.
@@ -275,6 +285,7 @@ fn main() {
     let swapchain_extension = Swapchain::new(&instance, &device)
         .expect("Unable to load Swapchain extension!");
 
+    // Swapchains need a *lot* of information.
     let swapchain_create_info = vk::SwapchainCreateInfoKHR {
         s_type: vk::StructureType::SwapchainCreateInfoKhr,
         p_next: ptr::null(),
@@ -303,6 +314,11 @@ fn main() {
             .expect("Unable to create swapchain!")
     };
 
+    // Move execution control over to winit, which will call us back for each
+    // event.
+    //
+    // Eventually, we'll want to replace this function with a real loop that
+    // tracks timing and peeks the event queue so that we can implement logic!
     events_loop.run_forever(|event| {
         match event {
             winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
