@@ -50,76 +50,17 @@ fn create_surface(
 }
 
 unsafe extern "system" fn vulkan_debug_callback(
-    _: vk::DebugReportFlagsEXT,
-    _: vk::DebugReportObjectTypeEXT,
-    _: vk::uint64_t,
-    _: vk::size_t,
-    _: vk::int32_t,
-    _: *const vk::c_char,
+    _flags: vk::DebugReportFlagsEXT,
+    _obj_type: vk::DebugReportObjectTypeEXT,
+    _obj: vk::uint64_t,
+    _location: vk::size_t,
+    _code: vk::int32_t,
+    _layer_prefix: *const vk::c_char,
     p_message: *const vk::c_char,
-    _: *mut vk::c_void,
+    _user_data: *mut vk::c_void,
 ) -> u32 {
     println!("{:?}", CStr::from_ptr(p_message));
     1
-}
-
-fn create_instance(entry: &Entry<V1_0>) -> Instance<V1_0> {
-    let app_name = CString::new("TryAsh").unwrap();
-    let raw_name = app_name.as_ptr();
-
-    let layer_names = [CString::new("VK_LAYER_LUNARG_standard_validation").unwrap()];
-    let layers_names_raw: Vec<*const i8> = layer_names
-        .iter()
-        .map(|layer_name| layer_name.as_ptr())
-        .collect();
-    let extension_names_raw = extension_names();
-
-    let appinfo = vk::ApplicationInfo {
-        p_application_name: raw_name,
-        s_type: vk::StructureType::ApplicationInfo,
-        p_next: ptr::null(),
-        application_version: 0,
-        p_engine_name: raw_name,
-        engine_version: 0,
-        api_version: vk_make_version!(1, 0, 69),
-    };
-
-    let create_info = vk::InstanceCreateInfo {
-        s_type: vk::StructureType::InstanceCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        p_application_info: &appinfo,
-        pp_enabled_layer_names: layers_names_raw.as_ptr(),
-        enabled_layer_count: layers_names_raw.len() as u32,
-        pp_enabled_extension_names: extension_names_raw.as_ptr(),
-        enabled_extension_count: extension_names_raw.len() as u32,
-    };
-
-    unsafe {
-        entry
-            .create_instance(&create_info, None)
-            .expect("Instance creation error")
-    }
-}
-
-fn create_debug_callback(entry: &Entry<V1_0>, instance: &Instance<V1_0>) {
-    let debug_info = vk::DebugReportCallbackCreateInfoEXT {
-        s_type: vk::StructureType::DebugReportCallbackCreateInfoExt,
-        p_next: ptr::null(),
-        flags: vk::DEBUG_REPORT_ERROR_BIT_EXT | vk::DEBUG_REPORT_WARNING_BIT_EXT
-            | vk::DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
-        pfn_callback: vulkan_debug_callback,
-        p_user_data: ptr::null_mut(),
-    };
-
-    let debug_report_extension = DebugReport::new(entry, instance)
-        .expect("Unable to load DebugReport extension");
-
-    unsafe {
-        debug_report_extension
-            .create_debug_report_callback_ext(&debug_info, None)
-            .unwrap();
-    };
 }
 
 fn main() {
@@ -133,8 +74,67 @@ fn main() {
         .unwrap();
 
     let entry = Entry::<V1_0>::new().unwrap();
-    let instance = create_instance(&entry);
-    create_debug_callback(&entry, &instance);
+
+    // Vulkan requires us to specify an app and engine name, so we use the same
+    // one for both.
+    let app_name = CString::new("TryAsh").unwrap();
+    let raw_name = app_name.as_ptr();
+
+    // Right now, we unconditionally load the validation layers, which rely on
+    // the LunarG Vulkan SDK being installed.
+    let layer_names = [CString::new("VK_LAYER_LUNARG_standard_validation").unwrap()];
+    let layers_names_raw: Vec<*const i8> = layer_names
+        .iter()
+        .map(|layer_name| layer_name.as_ptr())
+        .collect();
+    let extension_names_raw = extension_names();
+
+    let app_info = vk::ApplicationInfo {
+        p_application_name: raw_name,
+        s_type: vk::StructureType::ApplicationInfo,
+        p_next: ptr::null(),
+        application_version: 0,
+        p_engine_name: raw_name,
+        engine_version: 0,
+        api_version: vk_make_version!(1, 0, 69),
+    };
+
+    let create_info = vk::InstanceCreateInfo {
+        s_type: vk::StructureType::InstanceCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        p_application_info: &app_info,
+        pp_enabled_layer_names: layers_names_raw.as_ptr(),
+        enabled_layer_count: layers_names_raw.len() as u32,
+        pp_enabled_extension_names: extension_names_raw.as_ptr(),
+        enabled_extension_count: extension_names_raw.len() as u32,
+    };
+
+    let instance = unsafe {
+        entry
+            .create_instance(&create_info, None)
+            .expect("Unable to create Vulkan instance")
+    };
+
+    // Pick and choose what kind of debug messages we want to subscribe to and
+    // pipe them to vulkan_debug_callback.
+    let debug_info = vk::DebugReportCallbackCreateInfoEXT {
+        s_type: vk::StructureType::DebugReportCallbackCreateInfoExt,
+        p_next: ptr::null(),
+        flags: vk::DEBUG_REPORT_ERROR_BIT_EXT | vk::DEBUG_REPORT_WARNING_BIT_EXT
+            | vk::DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
+        pfn_callback: vulkan_debug_callback,
+        p_user_data: ptr::null_mut(),
+    };
+
+    let debug_report_extension = DebugReport::new(&entry, &instance)
+        .expect("Unable to load DebugReport extension");
+
+    let debug_callback = unsafe {
+        debug_report_extension
+            .create_debug_report_callback_ext(&debug_info, None)
+            .expect("Unable to attach DebugReport callback!")
+    };
 
     let surface = create_surface(&entry, &instance, &window)
         .expect("Failed to create surface!");
@@ -305,4 +305,13 @@ fn main() {
             _ => winit::ControlFlow::Continue,
         }
     });
+
+    // Make sure you clean up after yourself!
+    unsafe {
+        swapchain_extension.destroy_swapchain_khr(swapchain, None);
+        device.destroy_device(None);
+        surface_extension.destroy_surface_khr(surface, None);
+        debug_report_extension.destroy_debug_report_callback_ext(debug_callback, None);
+        instance.destroy_instance(None);
+    }
 }
