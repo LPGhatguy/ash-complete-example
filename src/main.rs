@@ -16,8 +16,8 @@ use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface};
 fn extension_names() -> Vec<*const i8> {
     vec![
         Surface::name().as_ptr(),
-        Win32Surface::name().as_ptr(),
         DebugReport::name().as_ptr(),
+        Win32Surface::name().as_ptr(),
     ]
 }
 
@@ -32,7 +32,10 @@ fn create_surface(
     use winit::os::windows::WindowExt;
 
     let hwnd = window.get_hwnd() as HWND;
-    let hinstance = unsafe { GetWindow(hwnd, 0) as *const vk::c_void };
+    let hinstance = unsafe {
+        GetWindow(hwnd, 0) as *const vk::c_void
+    };
+
     let win32_create_info = vk::Win32SurfaceCreateInfoKHR {
         s_type: vk::StructureType::Win32SurfaceCreateInfoKhr,
         p_next: ptr::null(),
@@ -73,6 +76,8 @@ fn main() {
         .build(&events_loop)
         .unwrap();
 
+    // 'Entry' implements a specific API version and automatically loads
+    // function pointers for us.
     let entry = Entry::<V1_0>::new().unwrap();
 
     // Vulkan requires us to specify an app and engine name, so we use the same
@@ -291,6 +296,7 @@ fn main() {
         old_swapchain: vk::SwapchainKHR::null(),
     };
 
+    // After a long-winded setup, actually create our swapchain
     let swapchain = unsafe {
         swapchain_extension
             .create_swapchain_khr(&swapchain_create_info, None)
