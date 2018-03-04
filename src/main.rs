@@ -106,9 +106,12 @@ fn create_debug_callback(entry: &Entry<V1_0>, instance: &Instance<V1_0>) {
         pfn_callback: vulkan_debug_callback,
         p_user_data: ptr::null_mut(),
     };
-    let debug_report_loader = DebugReport::new(entry, instance).expect("Unable to load debug report");
+
+    let debug_report_extension = DebugReport::new(entry, instance)
+        .expect("Unable to load DebugReport extension");
+
     unsafe {
-        debug_report_loader
+        debug_report_extension
             .create_debug_report_callback_ext(&debug_info, None)
             .unwrap();
     };
