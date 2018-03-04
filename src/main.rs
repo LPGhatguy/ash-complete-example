@@ -11,7 +11,6 @@ use std::ptr;
 use ash::{Entry, Instance, Device, vk};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface};
-use ash::vk::types::{PhysicalDevice};
 
 #[cfg(all(windows))]
 fn extension_names() -> Vec<*const i8> {
@@ -118,7 +117,7 @@ fn create_debug_callback(entry: &Entry<V1_0>, instance: &Instance<V1_0>) {
 fn main() {
     let (window_width, window_height) = (800, 600);
 
-    let events_loop = winit::EventsLoop::new();
+    let mut events_loop = winit::EventsLoop::new();
     let window = winit::WindowBuilder::new()
         .with_title("Try Ash")
         .with_dimensions(window_width, window_height)
@@ -221,5 +220,81 @@ fn main() {
         device.get_device_queue(queue_family_index, 0)
     };
 
-    loop {}
+    let surface_formats = surface_extension
+        .get_physical_device_surface_formats_khr(physical_device, surface)
+        .expect("Failed to query supported surface formats!");
+
+    // Blindly pick the first surface format the system reports as supported.
+    // Is this a good idea? I don't know.
+    let surface_format = surface_formats
+        .get(0)
+        .expect("Unable to find a surface format!");
+
+    let surface_capabilities = surface_extension
+        .get_physical_device_surface_capabilities_khr(physical_device, surface)
+        .expect("Unable to query surface capabilities!");
+
+    // Use the minimum number of images that our surface supports.
+    let desired_image_count = surface_capabilities.min_image_count;
+
+    // If current_extent is (u32::MAX, u32::MAX), the size of the surface
+    // is determined by the swapchain.
+    let surface_resolution = match surface_capabilities.current_extent.width {
+        std::u32::MAX => vk::Extent2D {
+            width: window_width,
+            height: window_height,
+        },
+        _ => surface_capabilities.current_extent,
+    };
+
+    let present_modes = surface_extension
+        .get_physical_device_surface_present_modes_khr(physical_device, surface)
+        .expect("Unable to query surface present modes!");
+
+    // We prefer to use Mailbox mode for presenting, but if it isn't available,
+    // fall back to Fifo, which is guaranteed by the spec to be supported.
+    let present_mode = present_modes
+        .iter()
+        .cloned()
+        .find(|&mode| mode == vk::PresentModeKHR::Mailbox)
+        .unwrap_or(vk::PresentModeKHR::Fifo);
+
+    let swapchain_extension = Swapchain::new(&instance, &device)
+        .expect("Unable to load Swapchain extension!");
+
+    let swapchain_create_info = vk::SwapchainCreateInfoKHR {
+        s_type: vk::StructureType::SwapchainCreateInfoKhr,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        surface: surface,
+        min_image_count: desired_image_count,
+        image_color_space: surface_format.color_space,
+        image_format: surface_format.format,
+        image_extent: surface_resolution.clone(),
+        image_array_layers: 1,
+        image_usage: vk::IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        image_sharing_mode: vk::SharingMode::Exclusive,
+        queue_family_index_count: 0,
+        p_queue_family_indices: ptr::null(),
+        pre_transform: surface_capabilities.current_transform,
+        composite_alpha: vk::COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        present_mode: present_mode,
+        clipped: 1,
+        old_swapchain: vk::SwapchainKHR::null(),
+    };
+
+    let swapchain = unsafe {
+        swapchain_extension
+            .create_swapchain_khr(&swapchain_create_info, None)
+            .expect("Unable to create swapchain!")
+    };
+
+    events_loop.run_forever(|event| {
+        match event {
+            winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
+                winit::ControlFlow::Break
+            },
+            _ => winit::ControlFlow::Continue,
+        }
+    });
 }
