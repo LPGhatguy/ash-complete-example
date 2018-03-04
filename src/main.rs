@@ -22,9 +22,9 @@ fn extension_names() -> Vec<*const i8> {
 }
 
 #[cfg(windows)]
-fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
-    entry: &E,
-    instance: &I,
+fn create_surface(
+    entry: &Entry<V1_0>,
+    instance: &Instance<V1_0>,
     window: &winit::Window,
 ) -> Result<vk::SurfaceKHR, vk::Result> {
     use winapi::shared::windef::HWND;
@@ -40,8 +40,13 @@ fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
         hinstance: hinstance,
         hwnd: hwnd as *const vk::c_void,
     };
-    let win32_surface_loader = Win32Surface::new(entry, instance).expect("Unable to load win32 surface");
-    unsafe { win32_surface_loader.create_win32_surface_khr(&win32_create_info, None) }
+
+    let win32_surface_extension = Win32Surface::new(entry, instance)
+        .expect("Unable to load Win32Surface extension");
+
+    unsafe {
+        win32_surface_extension.create_win32_surface_khr(&win32_create_info, None)
+    }
 }
 
 unsafe extern "system" fn vulkan_debug_callback(
