@@ -257,8 +257,16 @@ fn main() {
         .get_physical_device_surface_capabilities_khr(physical_device, surface)
         .expect("Unable to query surface capabilities!");
 
-    // Use the minimum number of images that our surface supports.
-    let desired_image_count = surface_capabilities.min_image_count;
+    // Use the minimum number of images that our surface supports, plus one to
+    // handle triple-buffering correctly.
+    let mut desired_image_count = surface_capabilities.min_image_count + 1;
+
+    // If max_image_count is 0, that means the implementation has no limit.
+    //
+    // Here, we make sure that we don't exceed the maximum!
+    if surface_capabilities.max_image_count > 0 && desired_image_count > surface_capabilities.max_image_count {
+        desired_image_count = surface_capabilities.max_image_count;
+    }
 
     // If current_extent is (u32::MAX, u32::MAX), the size of the surface
     // is determined by the swapchain.
@@ -314,6 +322,46 @@ fn main() {
             .expect("Unable to create swapchain!")
     };
 
+    // Pull our list of images out from the swapchain, we'll need these later.
+    let swapchain_images = swapchain_extension.get_swapchain_images_khr(swapchain)
+        .expect("Unable to get swapchain images!");
+
+    // To use our swapchain images, we need to construct image views that
+    // describe how to map color channels, access, etc.
+    let swapchain_image_views = swapchain_images
+        .iter()
+        .map(|&swapchain_image| {
+            let create_info = vk::ImageViewCreateInfo {
+                s_type: vk::StructureType::ImageViewCreateInfo,
+                p_next: ptr::null(),
+                flags: Default::default(),
+                image: swapchain_image,
+                view_type: vk::ImageViewType::Type2d,
+                format: surface_format.format,
+                components: vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::Identity,
+                    g: vk::ComponentSwizzle::Identity,
+                    b: vk::ComponentSwizzle::Identity,
+                    a: vk::ComponentSwizzle::Identity,
+                },
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::IMAGE_ASPECT_COLOR_BIT,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+            };
+
+            let image_view = unsafe {
+                device.create_image_view(&create_info, None)
+                    .expect("Failed to create image view for swapchain image!")
+            };
+
+            image_view
+        })
+        .collect::<Vec<_>>();
+
     // Move execution control over to winit, which will call us back for each
     // event.
     //
@@ -330,6 +378,10 @@ fn main() {
 
     // Make sure you clean up after yourself!
     unsafe {
+        for image_view in &swapchain_image_views {
+            device.destroy_image_view(*image_view, None);
+        }
+
         swapchain_extension.destroy_swapchain_khr(swapchain, None);
         device.destroy_device(None);
         surface_extension.destroy_surface_khr(surface, None);
