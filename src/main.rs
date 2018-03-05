@@ -306,7 +306,7 @@ fn main() {
         min_image_count: desired_image_count,
         image_color_space: surface_format.color_space,
         image_format: surface_format.format,
-        image_extent: surface_resolution.clone(),
+        image_extent: surface_resolution,
         image_array_layers: 1,
         image_usage: vk::IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
         image_sharing_mode: vk::SharingMode::Exclusive,
@@ -401,6 +401,150 @@ fn main() {
         shader_module
     };
 
+    // Now, we'll link our dumb byte buffers (shader modules) together into
+    // shader stages, which are a little bit smarter.
+    let entry_point_name = CString::new("main").unwrap();
+    let entry_point_name_raw = entry_point_name.as_ptr();
+
+    let vertex_pipeline_info = vk::PipelineShaderStageCreateInfo {
+        s_type: vk::StructureType::PipelineShaderStageCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        stage: vk::SHADER_STAGE_VERTEX_BIT,
+        module: vertex_shader_module,
+        p_name: entry_point_name_raw,
+        p_specialization_info: ptr::null(),
+    };
+
+    let fragment_pipeline_info = vk::PipelineShaderStageCreateInfo {
+        s_type: vk::StructureType::PipelineShaderStageCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        stage: vk::SHADER_STAGE_FRAGMENT_BIT,
+        module: fragment_shader_module,
+        p_name: entry_point_name_raw,
+        p_specialization_info: ptr::null(),
+    };
+
+    // Next, we need to describe what our vertex data looks like.
+    // Hint: there isn't any!
+    let vertex_input_info = vk::PipelineVertexInputStateCreateInfo {
+        s_type: vk::StructureType::PipelineVertexInputStateCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        vertex_binding_description_count: 0,
+        p_vertex_binding_descriptions: ptr::null(),
+        vertex_attribute_description_count: 0,
+        p_vertex_attribute_descriptions: ptr::null(),
+    };
+
+    // What kind of geometry are we drawing today?
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo {
+        s_type: vk::StructureType::PipelineInputAssemblyStateCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        topology: vk::PrimitiveTopology::TriangleList,
+        primitive_restart_enable: vk::VK_FALSE,
+    };
+
+    // Define our viewport and scissor to create a viewport state!
+    let viewport = vk::Viewport {
+        x: 0.0,
+        y: 0.0,
+        width: surface_resolution.width as f32,
+        height: surface_resolution.height as f32,
+        min_depth: 0.0,
+        max_depth: 0.0,
+    };
+
+    let scissor = vk::Rect2D {
+        offset: vk::Offset2D {
+            x: 0,
+            y: 0,
+        },
+        extent: surface_resolution,
+    };
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo {
+        s_type: vk::StructureType::PipelineViewportStateCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        viewport_count: 1,
+        p_viewports: &viewport,
+        scissor_count: 1,
+        p_scissors: &scissor,
+    };
+
+    // Define rasterizer state, with things like depth testing and face culling.
+    let rasterizer_state = vk::PipelineRasterizationStateCreateInfo {
+        s_type: vk::StructureType::PipelineRasterizationStateCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        depth_clamp_enable: vk::VK_FALSE,
+        rasterizer_discard_enable: vk::VK_FALSE,
+        polygon_mode: vk::PolygonMode::Fill,
+        line_width: 1.0,
+        cull_mode: vk::CULL_MODE_BACK_BIT,
+        front_face: vk::FrontFace::Clockwise,
+        depth_bias_enable: vk::VK_FALSE,
+        depth_bias_constant_factor: 0.0,
+        depth_bias_clamp: 0.0,
+        depth_bias_slope_factor: 0.0,
+    };
+
+    // We don't want to multisampling, but we have to say so.
+    let multisampling_state = vk::PipelineMultisampleStateCreateInfo {
+        s_type: vk::StructureType::PipelineMultisampleStateCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        sample_shading_enable: vk::VK_FALSE,
+        rasterization_samples: vk::SAMPLE_COUNT_1_BIT,
+        min_sample_shading: 1.0,
+        p_sample_mask: ptr::null(),
+        alpha_to_coverage_enable: vk::VK_FALSE,
+        alpha_to_one_enable: vk::VK_FALSE,
+    };
+
+    // Specify color blending, currently turned off.
+    let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
+        color_write_mask: vk::COLOR_COMPONENT_R_BIT | vk::COLOR_COMPONENT_G_BIT | vk::COLOR_COMPONENT_B_BIT |
+            vk::COLOR_COMPONENT_A_BIT,
+        blend_enable: vk::VK_FALSE,
+        src_color_blend_factor: vk::BlendFactor::One,
+        dst_color_blend_factor: vk::BlendFactor::Zero,
+        color_blend_op: vk::BlendOp::Add,
+        src_alpha_blend_factor: vk::BlendFactor::One,
+        dst_alpha_blend_factor: vk::BlendFactor::Zero,
+        alpha_blend_op: vk::BlendOp::Add,
+    };
+
+    let color_blending = vk::PipelineColorBlendStateCreateInfo {
+        s_type: vk::StructureType::PipelineColorBlendStateCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        logic_op_enable: vk::VK_FALSE,
+        logic_op: vk::LogicOp::Copy,
+        attachment_count: 1,
+        p_attachments: &color_blend_attachment,
+        blend_constants: [0.0, 0.0, 0.0, 0.0],
+    };
+
+    // Define our pipeline layout
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+        s_type: vk::StructureType::PipelineLayoutCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        set_layout_count: 0,
+        p_set_layouts: ptr::null(),
+        push_constant_range_count: 0,
+        p_push_constant_ranges: ptr::null(),
+    };
+
+    let pipeline_layout = unsafe {
+        device.create_pipeline_layout(&pipeline_layout_info, None)
+            .expect("Unable to create pipeline layout!")
+    };
+
     // Move execution control over to winit, which will call us back for each
     // event.
     //
@@ -417,6 +561,8 @@ fn main() {
 
     // Make sure you clean up after yourself!
     unsafe {
+        device.destroy_pipeline_layout(pipeline_layout, None);
+
         device.destroy_shader_module(vertex_shader_module, None);
         device.destroy_shader_module(fragment_shader_module, None);
 
@@ -425,9 +571,12 @@ fn main() {
         }
 
         swapchain_extension.destroy_swapchain_khr(swapchain, None);
+
         device.destroy_device(None);
+
         surface_extension.destroy_surface_khr(surface, None);
         debug_report_extension.destroy_debug_report_callback_ext(debug_callback, None);
+
         instance.destroy_instance(None);
     }
 }
