@@ -12,6 +12,7 @@ use ash::{Entry, Instance, Device, vk};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface};
 
+// Rust lets us statically embed build artifacts into our binary. Neat!
 static VERTEX_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-frag.spv");
 static FRAGMENT_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-vert.spv");
 
@@ -365,6 +366,41 @@ fn main() {
         })
         .collect::<Vec<_>>();
 
+    // Create our vertex and fragment shader modules.
+    let vertex_shader_module = {
+        let create_info = vk::ShaderModuleCreateInfo {
+            s_type: vk::StructureType::ShaderModuleCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            code_size: VERTEX_SHADER.len(),
+            p_code: VERTEX_SHADER.as_ptr() as *const u32,
+        };
+
+        let shader_module = unsafe {
+            device.create_shader_module(&create_info, None)
+                .expect("Unable to create vertex shader module!")
+        };
+
+        shader_module
+    };
+
+    let fragment_shader_module = {
+        let create_info = vk::ShaderModuleCreateInfo {
+            s_type: vk::StructureType::ShaderModuleCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            code_size: FRAGMENT_SHADER.len(),
+            p_code: FRAGMENT_SHADER.as_ptr() as *const u32,
+        };
+
+        let shader_module = unsafe {
+            device.create_shader_module(&create_info, None)
+                .expect("Unable to create fragment shader module!")
+        };
+
+        shader_module
+    };
+
     // Move execution control over to winit, which will call us back for each
     // event.
     //
@@ -381,6 +417,9 @@ fn main() {
 
     // Make sure you clean up after yourself!
     unsafe {
+        device.destroy_shader_module(vertex_shader_module, None);
+        device.destroy_shader_module(fragment_shader_module, None);
+
         for image_view in &swapchain_image_views {
             device.destroy_image_view(*image_view, None);
         }
