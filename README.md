@@ -14,12 +14,9 @@ This project requires:
 Running the sample is as simple as:
 
 ```sh
+./build-shaders
 cargo run
 ```
-
-Once the examples are further along, they'll depend on GLSL shaders compiled to SPIR-V. I don't intend to check the compiled shaders into the repository, so they'll need to be compiled using `glslc`, included in the LunarG Vulkan SDK.
-
-See [build-shaders](build-shaders) for foundational shader build, which might be turned into a `Makefile` or `build.rs` step in the future.
 
 ## Resources
 * [Vulkan reference with KHR extensions](https://www.khronos.org/registry/vulkan/specs/1.0-wsi_extensions/html/vkspec.html)

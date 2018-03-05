@@ -12,6 +12,9 @@ use ash::{Entry, Instance, Device, vk};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface};
 
+static VERTEX_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-frag.spv");
+static FRAGMENT_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-vert.spv");
+
 // A set of platform-specific instance extensions.
 //
 // I don't have another machine to test other implementations, so only a Windows
