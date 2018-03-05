@@ -545,6 +545,8 @@ fn main() {
             .expect("Unable to create pipeline layout!")
     };
 
+    // Next up: https://vulkan-tutorial.com/Drawing_a_triangle/Graphics_pipeline_basics/Render_passes
+
     // Move execution control over to winit, which will call us back for each
     // event.
     //

@@ -20,6 +20,7 @@ cargo run
 
 ## Resources
 * [Vulkan reference with KHR extensions](https://www.khronos.org/registry/vulkan/specs/1.0-wsi_extensions/html/vkspec.html)
+* [vulkan-tutorial.com](https://vulkan-tutorial.com/Introduction)
 
 ## License
 This project is available under the terms of The Unlicense. See [LICENSE](LICENSE) for more details.
