@@ -11,10 +11,11 @@ use std::ptr;
 use ash::{Entry, Instance, Device, vk};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface};
+use ash::vk::types::{Pipeline, PipelineCache};
 
 // Rust lets us statically embed build artifacts into our binary. Neat!
-static VERTEX_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-frag.spv");
-static FRAGMENT_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-vert.spv");
+static VERTEX_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-vert.spv");
+static FRAGMENT_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-frag.spv");
 
 // A set of platform-specific instance extensions.
 //
@@ -404,7 +405,6 @@ fn main() {
     // Now, we'll link our dumb byte buffers (shader modules) together into
     // shader stages, which are a little bit smarter.
     let entry_point_name = CString::new("main").unwrap();
-    let entry_point_name_raw = entry_point_name.as_ptr();
 
     let vertex_pipeline_info = vk::PipelineShaderStageCreateInfo {
         s_type: vk::StructureType::PipelineShaderStageCreateInfo,
@@ -412,7 +412,7 @@ fn main() {
         flags: Default::default(),
         stage: vk::SHADER_STAGE_VERTEX_BIT,
         module: vertex_shader_module,
-        p_name: entry_point_name_raw,
+        p_name: entry_point_name.as_ptr(),
         p_specialization_info: ptr::null(),
     };
 
@@ -422,13 +422,15 @@ fn main() {
         flags: Default::default(),
         stage: vk::SHADER_STAGE_FRAGMENT_BIT,
         module: fragment_shader_module,
-        p_name: entry_point_name_raw,
+        p_name: entry_point_name.as_ptr(),
         p_specialization_info: ptr::null(),
     };
 
+    let shader_stages = vec![vertex_pipeline_info, fragment_pipeline_info];
+
     // Next, we need to describe what our vertex data looks like.
     // Hint: there isn't any!
-    let vertex_input_info = vk::PipelineVertexInputStateCreateInfo {
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
         s_type: vk::StructureType::PipelineVertexInputStateCreateInfo,
         p_next: ptr::null(),
         flags: Default::default(),
@@ -439,7 +441,7 @@ fn main() {
     };
 
     // What kind of geometry are we drawing today?
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo {
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
         s_type: vk::StructureType::PipelineInputAssemblyStateCreateInfo,
         p_next: ptr::null(),
         flags: Default::default(),
@@ -476,7 +478,7 @@ fn main() {
     };
 
     // Define rasterizer state, with things like depth testing and face culling.
-    let rasterizer_state = vk::PipelineRasterizationStateCreateInfo {
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo {
         s_type: vk::StructureType::PipelineRasterizationStateCreateInfo,
         p_next: ptr::null(),
         flags: Default::default(),
@@ -493,7 +495,7 @@ fn main() {
     };
 
     // We don't want to multisampling, but we have to say so.
-    let multisampling_state = vk::PipelineMultisampleStateCreateInfo {
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo {
         s_type: vk::StructureType::PipelineMultisampleStateCreateInfo,
         p_next: ptr::null(),
         flags: Default::default(),
@@ -518,7 +520,7 @@ fn main() {
         alpha_blend_op: vk::BlendOp::Add,
     };
 
-    let color_blending = vk::PipelineColorBlendStateCreateInfo {
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
         s_type: vk::StructureType::PipelineColorBlendStateCreateInfo,
         p_next: ptr::null(),
         flags: Default::default(),
@@ -593,6 +595,39 @@ fn main() {
             .expect("Failed to create render pass!")
     };
 
+    // This is what the last hundreds of lines have been leading up to: actually
+    // creating a graphics pipeline.
+    //
+    // At this point, we still haven't actually accomplished anything, though.
+    let pipeline_info = vk::GraphicsPipelineCreateInfo {
+        s_type: vk::StructureType::GraphicsPipelineCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        stage_count: shader_stages.len() as u32,
+        p_stages: shader_stages.as_ptr(),
+        p_vertex_input_state: &vertex_input_state,
+        p_input_assembly_state: &input_assembly_state,
+        p_viewport_state: &viewport_state,
+        p_rasterization_state: &rasterization_state,
+        p_multisample_state: &multisample_state,
+        p_depth_stencil_state: ptr::null(),
+        p_color_blend_state: &color_blend_state,
+        p_dynamic_state: ptr::null(),
+        p_tessellation_state: ptr::null(),
+        layout: pipeline_layout,
+        render_pass: render_pass,
+        subpass: 0,
+        base_pipeline_handle: Pipeline::null(),
+        base_pipeline_index: -1,
+    };
+
+    let graphics_pipeline = unsafe {
+        device.create_graphics_pipelines(PipelineCache::null(), &[pipeline_info], None)
+            .expect("Unable to create graphics pipeline!")[0]
+    };
+
+    // Next up: https://vulkan-tutorial.com/Drawing_a_triangle/Drawing
+
     // Move execution control over to winit, which will call us back for each
     // event.
     //
@@ -609,6 +644,7 @@ fn main() {
 
     // Make sure you clean up after yourself!
     unsafe {
+        device.destroy_pipeline(graphics_pipeline, None);
         device.destroy_render_pass(render_pass, None);
         device.destroy_pipeline_layout(pipeline_layout, None);
 
