@@ -11,7 +11,6 @@ use std::ptr;
 use ash::{Entry, Instance, Device, vk};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface};
-use ash::vk::types::{Pipeline, PipelineCache};
 
 // Rust lets us statically embed build artifacts into our binary. Neat!
 static VERTEX_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-vert.spv");
@@ -578,6 +577,16 @@ fn main() {
         p_preserve_attachments: ptr::null(),
     };
 
+    let dependency = vk::SubpassDependency {
+        dependency_flags: Default::default(),
+        src_subpass: vk::VK_SUBPASS_EXTERNAL,
+        dst_subpass: 0,
+        src_stage_mask: vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        src_access_mask: vk::AccessFlags::empty(),
+        dst_stage_mask: vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        dst_access_mask: vk::ACCESS_COLOR_ATTACHMENT_READ_BIT | vk::ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+    };
+
     let render_pass_info = vk::RenderPassCreateInfo {
         s_type: vk::StructureType::RenderPassCreateInfo,
         p_next: ptr::null(),
@@ -586,8 +595,8 @@ fn main() {
         p_attachments: &color_attachment,
         subpass_count: 1,
         p_subpasses: &subpass,
-        dependency_count: 0,
-        p_dependencies: ptr::null(),
+        dependency_count: 1,
+        p_dependencies: &dependency,
     };
 
     let render_pass = unsafe {
@@ -617,36 +626,200 @@ fn main() {
         layout: pipeline_layout,
         render_pass: render_pass,
         subpass: 0,
-        base_pipeline_handle: Pipeline::null(),
+        base_pipeline_handle: vk::Pipeline::null(),
         base_pipeline_index: -1,
     };
 
     let graphics_pipeline = unsafe {
-        device.create_graphics_pipelines(PipelineCache::null(), &[pipeline_info], None)
+        device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
             .expect("Unable to create graphics pipeline!")[0]
     };
 
-    // Next up: https://vulkan-tutorial.com/Drawing_a_triangle/Drawing
+    // Create a framebuffer object for each image in our swapchain!
+    let swapchain_framebuffers = swapchain_image_views
+        .iter()
+        .map(|&image_view| {
+            let framebuffer_info = vk::FramebufferCreateInfo {
+                s_type: vk::StructureType::FramebufferCreateInfo,
+                p_next: ptr::null(),
+                flags: Default::default(),
+                render_pass: render_pass,
+                attachment_count: 1,
+                p_attachments: &image_view,
+                width: surface_resolution.width,
+                height: surface_resolution.height,
+                layers: 1,
+            };
 
-    // Move execution control over to winit, which will call us back for each
-    // event.
-    //
-    // Eventually, we'll want to replace this function with a real loop that
-    // tracks timing and peeks the event queue so that we can implement logic!
-    events_loop.run_forever(|event| {
-        match event {
-            winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
-                winit::ControlFlow::Break
-            },
-            _ => winit::ControlFlow::Continue,
+            let framebuffer = unsafe {
+                device.create_framebuffer(&framebuffer_info, None)
+                    .expect("Unable to create framebuffer!")
+            };
+
+            framebuffer
+        })
+        .collect::<Vec<_>>();
+
+    // Create a command pool to allocate our command buffers from.
+    let command_pool_info = vk::CommandPoolCreateInfo {
+        s_type: vk::StructureType::CommandPoolCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        queue_family_index: queue_family_index,
+    };
+
+    let command_pool = unsafe {
+        device.create_command_pool(&command_pool_info, None)
+            .expect("Unable to create command pool!")
+    };
+
+    let command_buffers_info = vk::CommandBufferAllocateInfo {
+        s_type: vk::StructureType::CommandBufferAllocateInfo,
+        p_next: ptr::null(),
+        command_pool: command_pool,
+        level: vk::CommandBufferLevel::Primary,
+        command_buffer_count: swapchain_framebuffers.len() as u32,
+    };
+
+    let command_buffers = unsafe {
+        device.allocate_command_buffers(&command_buffers_info)
+            .expect("Unable to allocate command buffers!")
+    };
+
+    for (index, &command_buffer) in command_buffers.iter().enumerate() {
+        let begin_info = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::CommandBufferBeginInfo,
+            p_next: ptr::null(),
+            flags: vk::COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
+            p_inheritance_info: ptr::null(),
+        };
+
+        unsafe {
+            device.begin_command_buffer(command_buffer, &begin_info)
+                .expect("Unable to begin command buffer!");
         }
-    });
+
+        let clear_color = vk::ClearValue::new_color(vk::ClearColorValue::new_float32([1.0, 1.0, 0.0, 1.0]));
+
+        let render_pass_info = vk::RenderPassBeginInfo {
+            s_type: vk::StructureType::RenderPassBeginInfo,
+            p_next: ptr::null(),
+            render_pass: render_pass,
+            framebuffer: swapchain_framebuffers[index],
+            render_area: vk::Rect2D {
+                offset: vk::Offset2D {
+                    x: 0,
+                    y: 0,
+                },
+                extent: surface_resolution,
+            },
+            clear_value_count: 1,
+            p_clear_values: &clear_color,
+        };
+
+        unsafe {
+            device.cmd_begin_render_pass(command_buffer, &render_pass_info, vk::SubpassContents::Inline);
+            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::Graphics, graphics_pipeline);
+            device.cmd_draw(command_buffer,
+                3, // vertex_count
+                1, // instance_count
+                0, // first_vertex
+                0, // first_instance
+            );
+            device.cmd_end_render_pass(command_buffer);
+
+            device.end_command_buffer(command_buffer)
+                .expect("Unable to end command buffer!");
+        }
+    }
+
+    let semaphore_info = vk::SemaphoreCreateInfo {
+        s_type: vk::StructureType::SemaphoreCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+    };
+
+    let image_available_semaphore = unsafe {
+        device.create_semaphore(&semaphore_info, None)
+            .expect("Unable to create semaphore!")
+    };
+
+    let render_finished_semaphore = unsafe {
+        device.create_semaphore(&semaphore_info, None)
+            .expect("Unable to create semaphore!")
+    };
+
+    // It's main loop time!
+    loop {
+        let mut quit = false;
+        events_loop.poll_events(|event| {
+            match event {
+                winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
+                    quit = true;
+                },
+                _ => ()
+            }
+        });
+
+        if quit {
+            break;
+        }
+
+        let image_index = unsafe {
+            swapchain_extension.acquire_next_image_khr(swapchain, std::u64::MAX, image_available_semaphore, vk::Fence::null())
+                .expect("Unable to acquire next swapchain image!")
+        };
+
+        let wait_stages = [vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT];
+
+        let submit_info = vk::SubmitInfo {
+            s_type: vk::StructureType::SubmitInfo,
+            p_next: ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &image_available_semaphore,
+            p_wait_dst_stage_mask: wait_stages.as_ptr(),
+            signal_semaphore_count: 1,
+            p_signal_semaphores: &render_finished_semaphore,
+            command_buffer_count: 1,
+            p_command_buffers: &command_buffers[image_index as usize],
+        };
+
+        unsafe {
+            device.queue_submit(present_queue, &[submit_info], vk::Fence::null())
+                .expect("Unable to submit to queue!");
+        }
+
+        let present_info = vk::PresentInfoKHR {
+            s_type: vk::StructureType::PresentInfoKhr,
+            p_next: ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &render_finished_semaphore,
+            swapchain_count: 1,
+            p_swapchains: &swapchain,
+            p_image_indices: &image_index,
+            p_results: ptr::null_mut(),
+        };
+
+        unsafe {
+            swapchain_extension.queue_present_khr(present_queue, &present_info)
+                .expect("Unable to present!");
+        }
+    }
 
     device.device_wait_idle()
         .expect("Unable to wait for device to idle? (huh)");
 
     // Make sure you clean up after yourself!
     unsafe {
+        device.destroy_semaphore(image_available_semaphore, None);
+        device.destroy_semaphore(render_finished_semaphore, None);
+
+        device.destroy_command_pool(command_pool, None);
+
+        for &framebuffer in &swapchain_framebuffers {
+            device.destroy_framebuffer(framebuffer, None);
+        }
+
         device.destroy_pipeline(graphics_pipeline, None);
         device.destroy_render_pass(render_pass, None);
         device.destroy_pipeline_layout(pipeline_layout, None);
@@ -654,8 +827,8 @@ fn main() {
         device.destroy_shader_module(vertex_shader_module, None);
         device.destroy_shader_module(fragment_shader_module, None);
 
-        for image_view in &swapchain_image_views {
-            device.destroy_image_view(*image_view, None);
+        for &image_view in &swapchain_image_views {
+            device.destroy_image_view(image_view, None);
         }
 
         swapchain_extension.destroy_swapchain_khr(swapchain, None);
