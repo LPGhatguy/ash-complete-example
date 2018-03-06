@@ -529,7 +529,6 @@ fn main() {
         blend_constants: [0.0, 0.0, 0.0, 0.0],
     };
 
-    // Define our pipeline layout
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
         s_type: vk::StructureType::PipelineLayoutCreateInfo,
         p_next: ptr::null(),
@@ -545,7 +544,54 @@ fn main() {
             .expect("Unable to create pipeline layout!")
     };
 
-    // Next up: https://vulkan-tutorial.com/Drawing_a_triangle/Graphics_pipeline_basics/Render_passes
+    // Create a color attachment to use our swapchain in our render pass.
+    let color_attachment = vk::AttachmentDescription {
+        flags: Default::default(),
+        format: surface_format.format,
+        samples: vk::SAMPLE_COUNT_1_BIT,
+        load_op: vk::AttachmentLoadOp::Clear,
+        store_op: vk::AttachmentStoreOp::Store,
+        stencil_load_op: vk::AttachmentLoadOp::DontCare,
+        stencil_store_op: vk::AttachmentStoreOp::DontCare,
+        initial_layout: vk::ImageLayout::Undefined,
+        final_layout: vk::ImageLayout::PresentSrcKhr,
+    };
+
+    let color_attachment_ref = vk::AttachmentReference {
+        attachment: 0,
+        layout: vk::ImageLayout::ColorAttachmentOptimal,
+    };
+
+    // Each render pass is comprised of one or more subpasses.
+    let subpass = vk::SubpassDescription {
+        flags: Default::default(),
+        pipeline_bind_point: vk::PipelineBindPoint::Graphics,
+        color_attachment_count: 1,
+        p_color_attachments: &color_attachment_ref,
+        p_resolve_attachments: ptr::null(),
+        input_attachment_count: 0,
+        p_input_attachments: ptr::null(),
+        p_depth_stencil_attachment: ptr::null(),
+        preserve_attachment_count: 0,
+        p_preserve_attachments: ptr::null(),
+    };
+
+    let render_pass_info = vk::RenderPassCreateInfo {
+        s_type: vk::StructureType::RenderPassCreateInfo,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        attachment_count: 1,
+        p_attachments: &color_attachment,
+        subpass_count: 1,
+        p_subpasses: &subpass,
+        dependency_count: 0,
+        p_dependencies: ptr::null(),
+    };
+
+    let render_pass = unsafe {
+        device.create_render_pass(&render_pass_info, None)
+            .expect("Failed to create render pass!")
+    };
 
     // Move execution control over to winit, which will call us back for each
     // event.
@@ -563,6 +609,7 @@ fn main() {
 
     // Make sure you clean up after yourself!
     unsafe {
+        device.destroy_render_pass(render_pass, None);
         device.destroy_pipeline_layout(pipeline_layout, None);
 
         device.destroy_shader_module(vertex_shader_module, None);
