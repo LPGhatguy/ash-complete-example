@@ -642,6 +642,9 @@ fn main() {
         }
     });
 
+    device.device_wait_idle()
+        .expect("Unable to wait for device to idle? (huh)");
+
     // Make sure you clean up after yourself!
     unsafe {
         device.destroy_pipeline(graphics_pipeline, None);
