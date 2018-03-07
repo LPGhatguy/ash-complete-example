@@ -803,9 +803,6 @@ fn main() {
         unsafe {
             swapchain_extension.queue_present_khr(present_queue, &present_info)
                 .expect("Unable to present!");
-
-            device.queue_wait_idle(present_queue)
-                .expect("Unable to wait for queue to idle!?");
         }
     }
 
