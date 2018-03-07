@@ -699,7 +699,11 @@ fn main() {
                 .expect("Unable to begin command buffer!");
         }
 
-        let clear_color = vk::ClearValue::new_color(vk::ClearColorValue::new_float32([1.0, 1.0, 0.0, 1.0]));
+        let clear_color = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.39, 0.58, 0.93, 1.0],
+            },
+        };
 
         let render_pass_info = vk::RenderPassBeginInfo {
             s_type: vk::StructureType::RenderPassBeginInfo,
