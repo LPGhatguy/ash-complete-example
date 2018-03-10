@@ -78,6 +78,25 @@ unsafe extern "system" fn vulkan_debug_callback(
     1
 }
 
+fn set_up_debug_callback(debug_report_extension: &DebugReport) -> vk::DebugReportCallbackEXT {
+    // Pick and choose what kind of debug messages we want to subscribe to and
+    // pipe them to vulkan_debug_callback.
+    let debug_info = vk::DebugReportCallbackCreateInfoEXT {
+        s_type: vk::StructureType::DebugReportCallbackCreateInfoExt,
+        p_next: ptr::null(),
+        flags: vk::DEBUG_REPORT_ERROR_BIT_EXT | vk::DEBUG_REPORT_WARNING_BIT_EXT
+            | vk::DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
+        pfn_callback: vulkan_debug_callback,
+        p_user_data: ptr::null_mut(),
+    };
+
+    unsafe {
+        debug_report_extension
+            .create_debug_report_callback_ext(&debug_info, None)
+            .expect("Unable to attach DebugReport callback!")
+    }
+}
+
 fn main() {
     let (window_width, window_height) = (800, 600);
 
@@ -135,31 +154,18 @@ fn main() {
             .expect("Unable to create Vulkan instance")
     };
 
-    // Pick and choose what kind of debug messages we want to subscribe to and
-    // pipe them to vulkan_debug_callback.
-    let debug_info = vk::DebugReportCallbackCreateInfoEXT {
-        s_type: vk::StructureType::DebugReportCallbackCreateInfoExt,
-        p_next: ptr::null(),
-        flags: vk::DEBUG_REPORT_ERROR_BIT_EXT | vk::DEBUG_REPORT_WARNING_BIT_EXT
-            | vk::DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
-        pfn_callback: vulkan_debug_callback,
-        p_user_data: ptr::null_mut(),
-    };
-
+    // Load VK_EXT_debug_report extension
     let debug_report_extension = DebugReport::new(&entry, &instance)
         .expect("Unable to load DebugReport extension");
 
-    let debug_callback = unsafe {
-        debug_report_extension
-            .create_debug_report_callback_ext(&debug_info, None)
-            .expect("Unable to attach DebugReport callback!")
-    };
+    let debug_callback = set_up_debug_callback(&debug_report_extension);
+
+    // Load VK_KHR_surface extension
+    let surface_extension = Surface::new(&entry, &instance)
+        .expect("Unable to load the Surface extension");
 
     let surface = create_surface(&entry, &instance, &window)
         .expect("Failed to create surface!");
-
-    // Load the VK_KHR_Surface extension
-    let surface_extension = Surface::new(&entry, &instance).expect("Unable to load the Surface extension");
 
     // Grab a list of physical devices we can use with our instance.
     let physical_devices = instance
@@ -241,6 +247,10 @@ fn main() {
             .expect("Unable to create Device!")
     };
 
+    // Load VK_KHR_swapchain extension
+    let swapchain_extension = Swapchain::new(&instance, &device)
+        .expect("Unable to load Swapchain extension!");
+
     // Pull the first queue from the family specified by queue_family_index out
     // of the device we just created.
     let present_queue = unsafe {
@@ -293,9 +303,6 @@ fn main() {
         .cloned()
         .find(|&mode| mode == vk::PresentModeKHR::Mailbox)
         .unwrap_or(vk::PresentModeKHR::Fifo);
-
-    let swapchain_extension = Swapchain::new(&instance, &device)
-        .expect("Unable to load Swapchain extension!");
 
     // Swapchains need a *lot* of information.
     let swapchain_create_info = vk::SwapchainCreateInfoKHR {
