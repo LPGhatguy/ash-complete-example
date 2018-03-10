@@ -1,9 +1,13 @@
 # Ash Example Without Abstractions
-This is an **incomplete** example of how to use [Ash](https://github.com/MaikKlein/ash) without relying on any "helper" or "example base" code. It's a work in progress and should be updated as I work through Ash's existing examples.
+This is a work-in-progress triangle example for [Ash](https://github.com/MaikKlein/ash) without relying on any "helper" or "example base" code.
 
-I've found that examples using hastily put-together abstractions tend to significantly obscure how to *actually* use a library in practice. Ash is guilty of this; I intend to submit a new set of examples back to Ash once they're up and working from this repository.
+I've found that a common pattern in examples is to create a base class that each specific example inherits from that abstracts a lot of details. This can make it hard to figure out what values are needed for each step, what pieces need to be configured uniquely for each example, and what the actual control flow of the program is.
 
-This project is intended to be read from beginning to end, and has descriptive comments to describe the idiosyncrasies of Ash and provide a small introduction to Vulkan.
+These abstractions eliminate the purpose of example code for a given library.
+
+Ash is a library guilty of this; I intend to submit a new set of examples back to Ash once I'm done building them from this repository.
+
+This project is intended to be read from beginning to end. It has instructive comments on both the Ash and Vulkan APIs, but does not try to be a complete Vulkan introduction.
 
 ## Running
 This project requires:
@@ -19,7 +23,7 @@ cargo run
 ```
 
 ## Resources
-* [Vulkan reference with KHR extensions](https://www.khronos.org/registry/vulkan/specs/1.0-wsi_extensions/html/vkspec.html)
+* [Vulkan 1.0 reference with WSI extensions](https://www.khronos.org/registry/vulkan/specs/1.0-wsi_extensions/html/vkspec.html)
 * [vulkan-tutorial.com](https://vulkan-tutorial.com/Introduction)
 
 ## License
