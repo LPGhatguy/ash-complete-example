@@ -4,6 +4,11 @@ extern crate cgmath;
 extern crate winapi;
 extern crate winit;
 
+#[macro_use]
+mod cstr;
+
+mod context;
+
 use std::default::Default;
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -12,19 +17,11 @@ use ash::{Entry, Instance, Device, vk};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::extensions;
 
-// A handy little macro that lets us specify C-style strings
-macro_rules! cstr {
-    ($s:expr) => (
-        concat!($s, "\0") as *const str as *const [i8] as *const i8
-    );
-}
+use context::VulkanContext;
 
 // Rust lets us statically embed built shaders straight into our binary!
 static VERTEX_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-vert.spv");
 static FRAGMENT_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-frag.spv");
-
-// Applications using Vulkan have to give Vulkan a name
-const APP_NAME: *const i8 = cstr!("Ash Triangle");
 
 // Our shaders all use the entrypoint 'main'
 const SHADER_ENTRYPOINT_NAME: *const i8 = cstr!("main");
@@ -32,84 +29,59 @@ const SHADER_ENTRYPOINT_NAME: *const i8 = cstr!("main");
 fn main() {
     let (window_width, window_height) = (800, 600);
 
-    let (window, mut events_loop) = create_window(window_width, window_height);
-    let entry = create_vulkan_entry();
-    let instance = create_vulkan_instance(&entry);
+    let mut context = VulkanContext::new();
 
-    // Load VK_EXT_debug_report extension
-    let debug_extension = extensions::DebugReport::new(&entry, &instance)
-        .expect("Unable to load DebugReport extension");
-
-    let debug_callback = set_up_debug_callback(&debug_extension);
-
-    // Load VK_KHR_surface extension
-    let surface_extension = extensions::Surface::new(&entry, &instance)
-        .expect("Unable to load the Surface extension");
-
-    let surface = create_surface(&entry, &instance, &window)
-        .expect("Failed to create surface!");
-
-    let (physical_device, queue_family_index) = choose_physical_device_and_queue_family(
-        &instance,
-        &surface_extension,
-        surface
-    );
-
-    let device = create_logical_device(
-        &instance,
-        physical_device,
-        queue_family_index,
-    );
+    // Pull the first queue from the family specified by queue_family_index out
+    // of the device we just created.
+    let present_queue = unsafe {
+        context.device.get_device_queue(context.the_queue, 0)
+    };
 
     let surface_parameters = query_surface_parameters(
-        &surface_extension,
-        physical_device,
-        surface,
+        &context.surface_extension,
+        context.physical_device,
+        context.surface,
         (window_width, window_height),
     );
 
-    // Load VK_KHR_swapchain extension
-    let swapchain_extension = extensions::Swapchain::new(&instance, &device)
-        .expect("Unable to load Swapchain extension!");
-
     let swapchain = create_swapchain(
-        &surface_extension,
-        &swapchain_extension,
-        physical_device,
-        surface,
+        &context.surface_extension,
+        &context.swapchain_extension,
+        context.physical_device,
+        context.surface,
         &surface_parameters,
     );
 
     // Pull our list of images out from the swapchain, we'll need these later.
-    let swapchain_images = swapchain_extension.get_swapchain_images_khr(swapchain)
+    let swapchain_images = context.swapchain_extension.get_swapchain_images_khr(swapchain)
         .expect("Unable to get swapchain images!");
 
     let swapchain_image_views = create_swapchain_image_views(
-        &device,
+        &context.device,
         &swapchain_images,
         surface_parameters.format,
     );
 
-    let (shader_modules, shader_stages) = create_shaders(&device);
+    let (shader_modules, shader_stages) = create_shaders(&context.device);
 
     let (pipeline_layout, render_pass, graphics_pipeline) = create_graphics_pipeline(
-        &device,
+        &context.device,
         &shader_stages,
         surface_parameters.resolution,
         surface_parameters.format,
     );
 
     let swapchain_framebuffers = create_swapchain_framebuffers(
-        &device,
+        &context.device,
         &swapchain_image_views,
         render_pass,
         surface_parameters.resolution,
     );
 
-    let command_pool = create_command_pool(&device, queue_family_index);
+    let command_pool = create_command_pool(&context.device, context.the_queue);
 
     let command_buffers = create_command_buffers(
-        &device,
+        &context.device,
         command_pool,
         &swapchain_framebuffers,
         render_pass,
@@ -117,18 +89,12 @@ fn main() {
         graphics_pipeline,
     );
 
-    let (image_available_semaphore, render_finished_semaphore) = create_semaphores(&device);
-
-    // Pull the first queue from the family specified by queue_family_index out
-    // of the device we just created.
-    let present_queue = unsafe {
-        device.get_device_queue(queue_family_index, 0)
-    };
+    let (image_available_semaphore, render_finished_semaphore) = create_semaphores(&context.device);
 
     // It's main loop time!
     loop {
         let mut quit = false;
-        events_loop.poll_events(|event| {
+        context.events_loop.poll_events(|event| {
             match event {
                 winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
                     quit = true;
@@ -145,8 +111,8 @@ fn main() {
         }
 
         render_frame(
-            &device,
-            &swapchain_extension,
+            &context.device,
+            &context.swapchain_extension,
             swapchain,
             image_available_semaphore,
             render_finished_semaphore,
@@ -155,304 +121,34 @@ fn main() {
         );
     }
 
-    device.device_wait_idle()
+    context.device.device_wait_idle()
         .expect("Unable to wait for device to idle? (huh)");
 
     // Make sure you clean up after yourself!
     unsafe {
-        device.destroy_semaphore(image_available_semaphore, None);
-        device.destroy_semaphore(render_finished_semaphore, None);
+        context.device.destroy_semaphore(image_available_semaphore, None);
+        context.device.destroy_semaphore(render_finished_semaphore, None);
 
-        device.destroy_command_pool(command_pool, None);
+        context.device.destroy_command_pool(command_pool, None);
 
         for &framebuffer in &swapchain_framebuffers {
-            device.destroy_framebuffer(framebuffer, None);
+            context.device.destroy_framebuffer(framebuffer, None);
         }
 
-        device.destroy_pipeline(graphics_pipeline, None);
-        device.destroy_render_pass(render_pass, None);
-        device.destroy_pipeline_layout(pipeline_layout, None);
+        context.device.destroy_pipeline(graphics_pipeline, None);
+        context.device.destroy_render_pass(render_pass, None);
+        context.device.destroy_pipeline_layout(pipeline_layout, None);
 
         for &shader_module in &shader_modules {
-            device.destroy_shader_module(shader_module, None);
+            context.device.destroy_shader_module(shader_module, None);
         }
 
         for &image_view in &swapchain_image_views {
-            device.destroy_image_view(image_view, None);
+            context.device.destroy_image_view(image_view, None);
         }
 
-        swapchain_extension.destroy_swapchain_khr(swapchain, None);
-
-        device.destroy_device(None);
-
-        surface_extension.destroy_surface_khr(surface, None);
-
-        debug_extension.destroy_debug_report_callback_ext(debug_callback, None);
-
-        instance.destroy_instance(None);
+        context.swapchain_extension.destroy_swapchain_khr(swapchain, None);
     }
-}
-
-// A set of platform-specific instance extensions.
-//
-// I don't have another machine to test other implementations, so only a Windows
-// implementation is provided right now.
-#[cfg(all(windows))]
-fn instance_extension_names() -> Vec<*const i8> {
-    vec![
-        extensions::Surface::name().as_ptr(),
-        extensions::DebugReport::name().as_ptr(),
-        extensions::Win32Surface::name().as_ptr(),
-    ]
-}
-
-// Uses a platform specific extension to create a surface. Like the
-// extension_names() method, it's only implemented for Windows right now.
-#[cfg(windows)]
-fn create_surface(
-    entry: &Entry<V1_0>,
-    instance: &Instance<V1_0>,
-    window: &winit::Window,
-) -> Result<vk::SurfaceKHR, vk::Result> {
-    use winapi::shared::windef::HWND;
-    use winapi::um::winuser::GetWindow;
-    use winit::os::windows::WindowExt;
-
-    let hwnd = window.get_hwnd() as HWND;
-    let hinstance = unsafe {
-        GetWindow(hwnd, 0) as *const vk::c_void
-    };
-
-    let win32_create_info = vk::Win32SurfaceCreateInfoKHR {
-        s_type: vk::StructureType::Win32SurfaceCreateInfoKhr,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        hinstance: hinstance,
-        hwnd: hwnd as *const vk::c_void,
-    };
-
-    let win32_surface_extension = extensions::Win32Surface::new(entry, instance)
-        .expect("Unable to load Win32Surface extension");
-
-    unsafe {
-        win32_surface_extension.create_win32_surface_khr(&win32_create_info, None)
-    }
-}
-
-// The signature of this function is important -- we pass it to the debug
-// callback extension below.
-unsafe extern "system" fn vulkan_debug_callback(
-    _flags: vk::DebugReportFlagsEXT,
-    _obj_type: vk::DebugReportObjectTypeEXT,
-    _obj: vk::uint64_t,
-    _location: vk::size_t,
-    _code: vk::int32_t,
-    _layer_prefix: *const vk::c_char,
-    p_message: *const vk::c_char,
-    _user_data: *mut vk::c_void,
-) -> u32 {
-    println!("{:?}", CStr::from_ptr(p_message));
-
-    vk::VK_FALSE
-}
-
-fn create_window(width: u32, height: u32) -> (winit::Window, winit::EventsLoop) {
-    // Construct a regular winit events loop and window; nothing special here.
-    let events_loop = winit::EventsLoop::new();
-    let window = winit::WindowBuilder::new()
-        .with_title("Ash Triangle")
-        .with_dimensions(width, height)
-        .build(&events_loop)
-        .expect("Unable to construct winit window!");
-
-    (window, events_loop)
-}
-
-fn create_vulkan_entry() -> Entry<V1_0> {
-    // 'Entry' implements a specific API version and automatically loads
-    // function pointers for us.
-    Entry::<V1_0>::new()
-        .expect("Unable to create Vulkan Entry!")
-}
-
-/// Create a Vulkan instance using the given entrypoints.
-///
-/// Normally, functions should use trait bounds when accepting Entry and
-/// Instance objects, but `create_vulkan_instance` needs a concrete Entry in
-/// order to return a concrete Instance object, at least until impl trait is
-/// stable.
-fn create_vulkan_instance(entry: &Entry<V1_0>) -> Instance<V1_0> {
-    // Right now, we unconditionally load the validation layers, which rely on
-    // the LunarG Vulkan SDK being installed.
-    let layer_names = [CString::new("VK_LAYER_LUNARG_standard_validation").unwrap()];
-    let layers_names_raw: Vec<*const i8> = layer_names
-        .iter()
-        .map(|layer_name| layer_name.as_ptr())
-        .collect();
-    let extension_names_raw = instance_extension_names();
-
-    let app_info = vk::ApplicationInfo {
-        s_type: vk::StructureType::ApplicationInfo,
-        p_next: ptr::null(),
-        p_application_name: APP_NAME,
-        application_version: 0,
-        p_engine_name: APP_NAME,
-        engine_version: 0,
-        api_version: vk_make_version!(1, 0, 69),
-    };
-
-    let create_info = vk::InstanceCreateInfo {
-        s_type: vk::StructureType::InstanceCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        p_application_info: &app_info,
-        pp_enabled_layer_names: layers_names_raw.as_ptr(),
-        enabled_layer_count: layers_names_raw.len() as u32,
-        pp_enabled_extension_names: extension_names_raw.as_ptr(),
-        enabled_extension_count: extension_names_raw.len() as u32,
-    };
-
-    let instance = unsafe {
-        entry
-            .create_instance(&create_info, None)
-            .expect("Unable to create Vulkan instance")
-    };
-
-    instance
-}
-
-/// We need to locate a physical device available to the system that supports
-/// all of the capabilities that we want.
-///
-/// This function returns a PhysicalDevice handle as well as a 'queue family index'
-fn choose_physical_device_and_queue_family<I>(
-    instance: &I,
-    surface_extension: &extensions::Surface,
-    surface: vk::SurfaceKHR,
-) -> (vk::PhysicalDevice, u32)
-    where I: InstanceV1_0,
-{
-    // Grab a list of physical devices we can use with our instance.
-    let physical_devices = instance
-        .enumerate_physical_devices()
-        .expect("Failed to enumerate physical devices!");
-
-    // For each physical device, attempt to locate a queue family that supports
-    // all of the features we want.
-    let (physical_device, queue_family_index) = physical_devices
-        .iter()
-        .filter_map(|physical_device| {
-            let queue_families = instance.get_physical_device_queue_family_properties(*physical_device);
-
-            queue_families
-                .iter()
-                .enumerate()
-                .filter_map(|(index, info)| {
-                    // Rust uses usize for array indexing, Vulkan uses u32.
-                    let index = index as u32;
-
-                    // We need a queue that supports graphics and the KHR
-                    // surface extension.
-                    let supports_graphics = info.queue_flags.subset(vk::QUEUE_GRAPHICS_BIT);
-
-                    // Can this queue draw to the surface we made?
-                    let supports_surface = surface_extension.get_physical_device_surface_support_khr(
-                        *physical_device,
-                        index,
-                        surface,
-                    );
-
-                    if supports_graphics && supports_surface {
-                        Some((*physical_device, index))
-                    } else {
-                        None
-                    }
-                })
-                .nth(0)
-        })
-        .nth(0)
-        .expect("Couldn't find suitable physical device that supports Vulkan and extensions!");
-
-    (physical_device, queue_family_index)
-}
-
-/// Creates a logical device that represents a connection to a physical device
-/// we've chosen.
-///
-/// We specify `queue_family_index`, since we need to know what kinds of queues
-/// we want to use at device creation time.
-fn create_logical_device(
-    instance: &Instance<V1_0>,
-    physical_device: vk::PhysicalDevice,
-    queue_family_index: u32,
-) -> Device<V1_0>
-{
-    // Our device needs to support the Swapchain extension.
-    let device_extension_names_raw = [
-        extensions::Swapchain::name().as_ptr(),
-    ];
-
-    // We don't specify any extra physical device features, but this is where
-    // they'd go.
-    let physical_device_features = vk::PhysicalDeviceFeatures {
-        ..Default::default()
-    };
-
-    // We're creating one queue of type `queue_family_index`
-    let queue_priorities = [1.0];
-    let queue_info = vk::DeviceQueueCreateInfo {
-        s_type: vk::StructureType::DeviceQueueCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        queue_family_index: queue_family_index,
-        p_queue_priorities: queue_priorities.as_ptr(),
-        queue_count: queue_priorities.len() as u32,
-    };
-
-    // Specify that we want to create a Device using one queue of a single queue
-    // family, specified by queue_info above.
-    let device_create_info = vk::DeviceCreateInfo {
-        s_type: vk::StructureType::DeviceCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        queue_create_info_count: 1,
-        p_queue_create_infos: &queue_info,
-        enabled_layer_count: 0,
-        pp_enabled_layer_names: ptr::null(),
-        enabled_extension_count: device_extension_names_raw.len() as u32,
-        pp_enabled_extension_names: device_extension_names_raw.as_ptr(),
-        p_enabled_features: &physical_device_features,
-    };
-
-    // Create our logical device using our information above.
-    let device: Device<V1_0> = unsafe {
-        instance
-            .create_device(physical_device, &device_create_info, None)
-            .expect("Unable to create Device!")
-    };
-
-    device
-}
-
-fn set_up_debug_callback(debug_extension: &extensions::DebugReport) -> vk::DebugReportCallbackEXT {
-    // Pick and choose what kind of debug messages we want to subscribe to and
-    // pipe them to vulkan_debug_callback.
-    let debug_info = vk::DebugReportCallbackCreateInfoEXT {
-        s_type: vk::StructureType::DebugReportCallbackCreateInfoExt,
-        p_next: ptr::null(),
-        flags: vk::DEBUG_REPORT_ERROR_BIT_EXT | vk::DEBUG_REPORT_WARNING_BIT_EXT
-            | vk::DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
-        pfn_callback: vulkan_debug_callback,
-        p_user_data: ptr::null_mut(),
-    };
-
-    let debug_callback = unsafe {
-        debug_extension
-            .create_debug_report_callback_ext(&debug_info, None)
-            .expect("Unable to attach DebugReport callback!")
-    };
-
-    debug_callback
 }
 
 ///
