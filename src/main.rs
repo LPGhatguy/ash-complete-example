@@ -32,26 +32,15 @@ const SHADER_ENTRYPOINT_NAME: *const i8 = cstr!("main");
 fn main() {
     let (window_width, window_height) = (800, 600);
 
-    // Construct a regular winit events loop and window; nothing special here.
-    let mut events_loop = winit::EventsLoop::new();
-    let window = winit::WindowBuilder::new()
-        .with_title("Ash Triangle")
-        .with_dimensions(window_width, window_height)
-        .build(&events_loop)
-        .expect("Unable to construct winit window!");
-
-    // 'Entry' implements a specific API version and automatically loads
-    // function pointers for us.
-    let entry = Entry::<V1_0>::new()
-        .expect("Unable to create Vulkan Entry!");
-
+    let (window, mut events_loop) = create_window(window_width, window_height);
+    let entry = create_vulkan_entry();
     let instance = create_vulkan_instance(&entry);
 
     // Load VK_EXT_debug_report extension
-    let debug_report_extension = extensions::DebugReport::new(&entry, &instance)
+    let debug_extension = extensions::DebugReport::new(&entry, &instance)
         .expect("Unable to load DebugReport extension");
 
-    let debug_callback = set_up_debug_callback(&debug_report_extension);
+    let debug_callback = set_up_debug_callback(&debug_extension);
 
     // Load VK_KHR_surface extension
     let surface_extension = extensions::Surface::new(&entry, &instance)
@@ -71,12 +60,6 @@ fn main() {
         physical_device,
         queue_family_index,
     );
-
-    // Pull the first queue from the family specified by queue_family_index out
-    // of the device we just created.
-    let present_queue = unsafe {
-        device.get_device_queue(queue_family_index, 0)
-    };
 
     let surface_parameters = query_surface_parameters(
         &surface_extension,
@@ -136,6 +119,12 @@ fn main() {
 
     let (image_available_semaphore, render_finished_semaphore) = create_semaphores(&device);
 
+    // Pull the first queue from the family specified by queue_family_index out
+    // of the device we just created.
+    let present_queue = unsafe {
+        device.get_device_queue(queue_family_index, 0)
+    };
+
     // It's main loop time!
     loop {
         let mut quit = false;
@@ -143,6 +132,9 @@ fn main() {
             match event {
                 winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
                     quit = true;
+                },
+                winit::Event::WindowEvent { event: winit::WindowEvent::Resized(width, height), ..} => {
+                    println!("Window resized to {}, {}", width, height);
                 },
                 _ => ()
             }
@@ -194,7 +186,8 @@ fn main() {
         device.destroy_device(None);
 
         surface_extension.destroy_surface_khr(surface, None);
-        debug_report_extension.destroy_debug_report_callback_ext(debug_callback, None);
+
+        debug_extension.destroy_debug_report_callback_ext(debug_callback, None);
 
         instance.destroy_instance(None);
     }
@@ -263,26 +256,23 @@ unsafe extern "system" fn vulkan_debug_callback(
     vk::VK_FALSE
 }
 
-/// Creates a debug callback extension using the VK_EXT_debug_report extension.
-fn set_up_debug_callback(debug_report_extension: &extensions::DebugReport) -> vk::DebugReportCallbackEXT {
-    // Pick and choose what kind of debug messages we want to subscribe to and
-    // pipe them to vulkan_debug_callback.
-    let debug_info = vk::DebugReportCallbackCreateInfoEXT {
-        s_type: vk::StructureType::DebugReportCallbackCreateInfoExt,
-        p_next: ptr::null(),
-        flags: vk::DEBUG_REPORT_ERROR_BIT_EXT | vk::DEBUG_REPORT_WARNING_BIT_EXT
-            | vk::DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
-        pfn_callback: vulkan_debug_callback,
-        p_user_data: ptr::null_mut(),
-    };
+fn create_window(width: u32, height: u32) -> (winit::Window, winit::EventsLoop) {
+    // Construct a regular winit events loop and window; nothing special here.
+    let events_loop = winit::EventsLoop::new();
+    let window = winit::WindowBuilder::new()
+        .with_title("Ash Triangle")
+        .with_dimensions(width, height)
+        .build(&events_loop)
+        .expect("Unable to construct winit window!");
 
-    let debug_callback = unsafe {
-        debug_report_extension
-            .create_debug_report_callback_ext(&debug_info, None)
-            .expect("Unable to attach DebugReport callback!")
-    };
+    (window, events_loop)
+}
 
-    debug_callback
+fn create_vulkan_entry() -> Entry<V1_0> {
+    // 'Entry' implements a specific API version and automatically loads
+    // function pointers for us.
+    Entry::<V1_0>::new()
+        .expect("Unable to create Vulkan Entry!")
 }
 
 /// Create a Vulkan instance using the given entrypoints.
@@ -442,6 +432,27 @@ fn create_logical_device(
     };
 
     device
+}
+
+fn set_up_debug_callback(debug_extension: &extensions::DebugReport) -> vk::DebugReportCallbackEXT {
+    // Pick and choose what kind of debug messages we want to subscribe to and
+    // pipe them to vulkan_debug_callback.
+    let debug_info = vk::DebugReportCallbackCreateInfoEXT {
+        s_type: vk::StructureType::DebugReportCallbackCreateInfoExt,
+        p_next: ptr::null(),
+        flags: vk::DEBUG_REPORT_ERROR_BIT_EXT | vk::DEBUG_REPORT_WARNING_BIT_EXT
+            | vk::DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
+        pfn_callback: vulkan_debug_callback,
+        p_user_data: ptr::null_mut(),
+    };
+
+    let debug_callback = unsafe {
+        debug_extension
+            .create_debug_report_callback_ext(&debug_info, None)
+            .expect("Unable to attach DebugReport callback!")
+    };
+
+    debug_callback
 }
 
 ///
