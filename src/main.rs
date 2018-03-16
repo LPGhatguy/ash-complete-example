@@ -10,10 +10,9 @@ mod cstr;
 mod context;
 
 use std::default::Default;
-use std::ffi::{CStr, CString};
 use std::ptr;
 
-use ash::{Entry, Instance, Device, vk};
+use ash::vk;
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::extensions;
 
@@ -26,75 +25,178 @@ static FRAGMENT_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangl
 // Our shaders all use the entrypoint 'main'
 const SHADER_ENTRYPOINT_NAME: *const i8 = cstr!("main");
 
+struct RandomGarbage {
+    context: VulkanContext,
+    window_size: (u32, u32),
+
+    swapchain: vk::SwapchainKHR,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_image_views: Vec<vk::ImageView>,
+
+    shader_modules: Vec<vk::ShaderModule>,
+    shader_stages: Vec<vk::PipelineShaderStageCreateInfo>,
+
+    pipeline_layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+    graphics_pipeline: vk::Pipeline,
+
+    swapchain_framebuffers: Vec<vk::Framebuffer>,
+
+    command_pool: vk::CommandPool,
+    command_buffers: Vec<vk::CommandBuffer>,
+
+    image_available_semaphore: vk::Semaphore,
+    render_finished_semaphore: vk::Semaphore,
+}
+
+impl RandomGarbage {
+    fn new(context: VulkanContext, window_size: (u32, u32)) -> RandomGarbage {
+        RandomGarbage {
+            context,
+            window_size,
+
+            swapchain: vk::SwapchainKHR::null(),
+            swapchain_images: Vec::new(),
+            swapchain_image_views: Vec::new(),
+
+            shader_modules: Vec::new(),
+            shader_stages: Vec::new(),
+
+            pipeline_layout: vk::PipelineLayout::null(),
+            render_pass: vk::RenderPass::null(),
+            graphics_pipeline: vk::Pipeline::null(),
+
+            swapchain_framebuffers: Vec::new(),
+
+            command_pool: vk::CommandPool::null(),
+            command_buffers: Vec::new(),
+
+            image_available_semaphore: vk::Semaphore::null(),
+            render_finished_semaphore: vk::Semaphore::null(),
+        }
+    }
+
+    fn query_surface_parameters(&self) -> SurfaceParameters {
+        let surface_formats = self.context.surface_extension
+            .get_physical_device_surface_formats_khr(self.context.physical_device, self.context.surface)
+            .expect("Failed to query supported surface formats!");
+
+        // Blindly pick the first surface format the system reports as supported.
+        // Is this a good idea? Not really.
+        let surface_format = surface_formats
+            .get(0)
+            .expect("Unable to find a surface format!");
+
+        let surface_capabilities = self.context.surface_extension
+            .get_physical_device_surface_capabilities_khr(self.context.physical_device, self.context.surface)
+            .expect("Unable to query surface capabilities!");
+
+        // Use the minimum number of images that our surface supports, plus one to
+        // handle triple-buffering correctly.
+        let mut desired_image_count = surface_capabilities.min_image_count + 1;
+
+        // If max_image_count is 0, that means the implementation has no limit.
+        //
+        // Here, we make sure that we don't exceed the maximum!
+        if surface_capabilities.max_image_count > 0 && desired_image_count > surface_capabilities.max_image_count {
+            desired_image_count = surface_capabilities.max_image_count;
+        }
+
+        // If current_extent is (u32::MAX, u32::MAX), the size of the surface
+        // is determined by the swapchain.
+        let surface_resolution = match surface_capabilities.current_extent.width {
+            std::u32::MAX => vk::Extent2D {
+                width: self.window_size.0,
+                height: self.window_size.1,
+            },
+            _ => surface_capabilities.current_extent,
+        };
+
+        SurfaceParameters {
+            resolution: surface_resolution,
+            format: surface_format.format,
+            color_space: surface_format.color_space,
+            swapchain_image_count: desired_image_count,
+            capabilities: surface_capabilities,
+        }
+    }
+}
+
 fn main() {
     let (window_width, window_height) = (800, 600);
 
-    let mut context = VulkanContext::new();
+    let flexo = VulkanContext::new();
+    let mut burgers = RandomGarbage::new(flexo, (window_width, window_height));
 
-    // Pull the first queue from the family specified by queue_family_index out
-    // of the device we just created.
-    let present_queue = unsafe {
-        context.device.get_device_queue(context.the_queue, 0)
-    };
+    let surface_parameters = burgers.query_surface_parameters();
 
-    let surface_parameters = query_surface_parameters(
-        &context.surface_extension,
-        context.physical_device,
-        context.surface,
-        (window_width, window_height),
-    );
-
-    let swapchain = create_swapchain(
-        &context.surface_extension,
-        &context.swapchain_extension,
-        context.physical_device,
-        context.surface,
+    burgers.swapchain = create_swapchain(
+        &burgers.context.surface_extension,
+        &burgers.context.swapchain_extension,
+        burgers.context.physical_device,
+        burgers.context.surface,
         &surface_parameters,
     );
 
     // Pull our list of images out from the swapchain, we'll need these later.
-    let swapchain_images = context.swapchain_extension.get_swapchain_images_khr(swapchain)
+    burgers.swapchain_images = burgers.context.swapchain_extension.get_swapchain_images_khr(burgers.swapchain)
         .expect("Unable to get swapchain images!");
 
-    let swapchain_image_views = create_swapchain_image_views(
-        &context.device,
-        &swapchain_images,
+    burgers.swapchain_image_views = create_swapchain_image_views(
+        &burgers.context.device,
+        &burgers.swapchain_images,
         surface_parameters.format,
     );
 
-    let (shader_modules, shader_stages) = create_shaders(&context.device);
+    {
+        let (shader_modules, shader_stages) = create_shaders(&burgers.context.device);
 
-    let (pipeline_layout, render_pass, graphics_pipeline) = create_graphics_pipeline(
-        &context.device,
-        &shader_stages,
+        burgers.shader_modules = shader_modules;
+        burgers.shader_stages = shader_stages;
+    }
+
+    {
+        let (pipeline_layout, render_pass, graphics_pipeline) = create_graphics_pipeline(
+            &burgers.context.device,
+            &burgers.shader_stages,
+            surface_parameters.resolution,
+            surface_parameters.format,
+        );
+
+        burgers.pipeline_layout = pipeline_layout;
+        burgers.render_pass = render_pass;
+        burgers.graphics_pipeline = graphics_pipeline;
+    }
+
+    burgers.swapchain_framebuffers = create_swapchain_framebuffers(
+        &burgers.context.device,
+        &burgers.swapchain_image_views,
+        burgers.render_pass,
         surface_parameters.resolution,
-        surface_parameters.format,
     );
 
-    let swapchain_framebuffers = create_swapchain_framebuffers(
-        &context.device,
-        &swapchain_image_views,
-        render_pass,
-        surface_parameters.resolution,
-    );
+    burgers.command_pool = create_command_pool(&burgers.context.device, burgers.context.the_queue);
 
-    let command_pool = create_command_pool(&context.device, context.the_queue);
-
-    let command_buffers = create_command_buffers(
-        &context.device,
-        command_pool,
-        &swapchain_framebuffers,
-        render_pass,
+    burgers.command_buffers = create_command_buffers(
+        &burgers.context.device,
+        burgers.command_pool,
+        &burgers.swapchain_framebuffers,
+        burgers.render_pass,
         &surface_parameters,
-        graphics_pipeline,
+        burgers.graphics_pipeline,
     );
 
-    let (image_available_semaphore, render_finished_semaphore) = create_semaphores(&context.device);
+    {
+        let (image_available_semaphore, render_finished_semaphore) = create_semaphores(&burgers.context.device);
+
+        burgers.image_available_semaphore = image_available_semaphore;
+        burgers.render_finished_semaphore = render_finished_semaphore;
+    }
 
     // It's main loop time!
     loop {
         let mut quit = false;
-        context.events_loop.poll_events(|event| {
+        burgers.context.events_loop.poll_events(|event| {
             match event {
                 winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
                     quit = true;
@@ -110,44 +212,48 @@ fn main() {
             break;
         }
 
+        let present_queue = unsafe {
+            burgers.context.device.get_device_queue(burgers.context.the_queue, 0)
+        };
+
         render_frame(
-            &context.device,
-            &context.swapchain_extension,
-            swapchain,
-            image_available_semaphore,
-            render_finished_semaphore,
-            &command_buffers,
+            &burgers.context.device,
+            &burgers.context.swapchain_extension,
+            burgers.swapchain,
+            burgers.image_available_semaphore,
+            burgers.render_finished_semaphore,
+            &burgers.command_buffers,
             present_queue,
         );
     }
 
-    context.device.device_wait_idle()
+    burgers.context.device.device_wait_idle()
         .expect("Unable to wait for device to idle? (huh)");
 
     // Make sure you clean up after yourself!
     unsafe {
-        context.device.destroy_semaphore(image_available_semaphore, None);
-        context.device.destroy_semaphore(render_finished_semaphore, None);
+        burgers.context.device.destroy_semaphore(burgers.image_available_semaphore, None);
+        burgers.context.device.destroy_semaphore(burgers.render_finished_semaphore, None);
 
-        context.device.destroy_command_pool(command_pool, None);
+        burgers.context.device.destroy_command_pool(burgers.command_pool, None);
 
-        for &framebuffer in &swapchain_framebuffers {
-            context.device.destroy_framebuffer(framebuffer, None);
+        for &framebuffer in &burgers.swapchain_framebuffers {
+            burgers.context.device.destroy_framebuffer(framebuffer, None);
         }
 
-        context.device.destroy_pipeline(graphics_pipeline, None);
-        context.device.destroy_render_pass(render_pass, None);
-        context.device.destroy_pipeline_layout(pipeline_layout, None);
+        burgers.context.device.destroy_pipeline(burgers.graphics_pipeline, None);
+        burgers.context.device.destroy_render_pass(burgers.render_pass, None);
+        burgers.context.device.destroy_pipeline_layout(burgers.pipeline_layout, None);
 
-        for &shader_module in &shader_modules {
-            context.device.destroy_shader_module(shader_module, None);
+        for &shader_module in &burgers.shader_modules {
+            burgers.context.device.destroy_shader_module(shader_module, None);
         }
 
-        for &image_view in &swapchain_image_views {
-            context.device.destroy_image_view(image_view, None);
+        for &image_view in &burgers.swapchain_image_views {
+            burgers.context.device.destroy_image_view(image_view, None);
         }
 
-        context.swapchain_extension.destroy_swapchain_khr(swapchain, None);
+        burgers.context.swapchain_extension.destroy_swapchain_khr(burgers.swapchain, None);
     }
 }
 
@@ -529,57 +635,6 @@ struct SurfaceParameters {
     color_space: vk::ColorSpaceKHR,
     swapchain_image_count: u32,
     capabilities: vk::SurfaceCapabilitiesKHR
-}
-
-fn query_surface_parameters(
-    surface_extension: &extensions::Surface,
-    physical_device: vk::PhysicalDevice,
-    surface: vk::SurfaceKHR,
-    window_size: (u32, u32),
-) -> SurfaceParameters
-{
-    let surface_formats = surface_extension
-        .get_physical_device_surface_formats_khr(physical_device, surface)
-        .expect("Failed to query supported surface formats!");
-
-    // Blindly pick the first surface format the system reports as supported.
-    // Is this a good idea? Not really.
-    let surface_format = surface_formats
-        .get(0)
-        .expect("Unable to find a surface format!");
-
-    let surface_capabilities = surface_extension
-        .get_physical_device_surface_capabilities_khr(physical_device, surface)
-        .expect("Unable to query surface capabilities!");
-
-    // Use the minimum number of images that our surface supports, plus one to
-    // handle triple-buffering correctly.
-    let mut desired_image_count = surface_capabilities.min_image_count + 1;
-
-    // If max_image_count is 0, that means the implementation has no limit.
-    //
-    // Here, we make sure that we don't exceed the maximum!
-    if surface_capabilities.max_image_count > 0 && desired_image_count > surface_capabilities.max_image_count {
-        desired_image_count = surface_capabilities.max_image_count;
-    }
-
-    // If current_extent is (u32::MAX, u32::MAX), the size of the surface
-    // is determined by the swapchain.
-    let surface_resolution = match surface_capabilities.current_extent.width {
-        std::u32::MAX => vk::Extent2D {
-            width: window_size.0,
-            height: window_size.1,
-        },
-        _ => surface_capabilities.current_extent,
-    };
-
-    SurfaceParameters {
-        resolution: surface_resolution,
-        format: surface_format.format,
-        color_space: surface_format.color_space,
-        swapchain_image_count: desired_image_count,
-        capabilities: surface_capabilities,
-    }
 }
 
 fn create_swapchain(
