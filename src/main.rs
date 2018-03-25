@@ -120,6 +120,161 @@ impl RandomGarbage {
             capabilities: surface_capabilities,
         }
     }
+
+    fn create_swapchain(&mut self) {
+        let surface_parameters = self.query_surface_parameters();
+
+        let present_modes = self.context.surface_extension
+            .get_physical_device_surface_present_modes_khr(self.context.physical_device, self.context.surface)
+            .expect("Unable to query surface present modes!");
+
+        // We prefer to use Mailbox mode for presenting, but if it isn't available,
+        // fall back to Fifo, which is guaranteed by the spec to be supported.
+        let present_mode = present_modes
+            .iter()
+            .cloned()
+            .find(|&mode| mode == vk::PresentModeKHR::Mailbox)
+            .unwrap_or(vk::PresentModeKHR::Fifo);
+
+        // Swapchains need a *lot* of information.
+        let swapchain_create_info = vk::SwapchainCreateInfoKHR {
+            s_type: vk::StructureType::SwapchainCreateInfoKhr,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            surface: self.context.surface,
+            min_image_count: surface_parameters.swapchain_image_count,
+            image_color_space: surface_parameters.color_space,
+            image_format: surface_parameters.format,
+            image_extent: surface_parameters.resolution,
+            image_array_layers: 1,
+            image_usage: vk::IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            image_sharing_mode: vk::SharingMode::Exclusive,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+            pre_transform: surface_parameters.capabilities.current_transform,
+            composite_alpha: vk::COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            present_mode: present_mode,
+            clipped: 1,
+            old_swapchain: vk::SwapchainKHR::null(),
+        };
+
+        // After a long-winded setup, actually create our swapchain
+        self.swapchain = unsafe {
+            self.context.swapchain_extension
+                .create_swapchain_khr(&swapchain_create_info, None)
+                .expect("Unable to create swapchain!")
+        };
+    }
+
+    fn create_swapchain_images(&mut self) {
+        // Pull our list of images out from the swapchain, we'll need these later.
+        self.swapchain_images = self.context.swapchain_extension.get_swapchain_images_khr(self.swapchain)
+            .expect("Unable to get swapchain images!");
+    }
+
+    fn create_swapchain_image_views(&mut self) {
+        let surface_parameters = self.query_surface_parameters();
+
+        // To use our swapchain images, we need to construct image views that
+        // describe how to map color channels, access, etc.
+        self.swapchain_image_views = self.swapchain_images
+            .iter()
+            .map(|&swapchain_image| {
+                let create_info = vk::ImageViewCreateInfo {
+                    s_type: vk::StructureType::ImageViewCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    image: swapchain_image,
+                    view_type: vk::ImageViewType::Type2d,
+                    format: surface_parameters.format,
+                    components: vk::ComponentMapping {
+                        r: vk::ComponentSwizzle::Identity,
+                        g: vk::ComponentSwizzle::Identity,
+                        b: vk::ComponentSwizzle::Identity,
+                        a: vk::ComponentSwizzle::Identity,
+                    },
+                    subresource_range: vk::ImageSubresourceRange {
+                        aspect_mask: vk::IMAGE_ASPECT_COLOR_BIT,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
+                };
+
+                let image_view = unsafe {
+                    self.context.device.create_image_view(&create_info, None)
+                        .expect("Failed to create image view for swapchain image!")
+                };
+
+                image_view
+            })
+            .collect::<Vec<_>>();
+    }
+
+    fn create_shaders(&mut self) {
+        // Create our vertex and fragment shader modules.
+        let vertex_shader_module = {
+            let create_info = vk::ShaderModuleCreateInfo {
+                s_type: vk::StructureType::ShaderModuleCreateInfo,
+                p_next: ptr::null(),
+                flags: Default::default(),
+                code_size: VERTEX_SHADER.len(),
+                p_code: VERTEX_SHADER.as_ptr() as *const u32,
+            };
+
+            let shader_module = unsafe {
+                self.context.device.create_shader_module(&create_info, None)
+                    .expect("Unable to create vertex shader module!")
+            };
+
+            shader_module
+        };
+
+        let fragment_shader_module = {
+            let create_info = vk::ShaderModuleCreateInfo {
+                s_type: vk::StructureType::ShaderModuleCreateInfo,
+                p_next: ptr::null(),
+                flags: Default::default(),
+                code_size: FRAGMENT_SHADER.len(),
+                p_code: FRAGMENT_SHADER.as_ptr() as *const u32,
+            };
+
+            let shader_module = unsafe {
+                self.context.device.create_shader_module(&create_info, None)
+                    .expect("Unable to create fragment shader module!")
+            };
+
+            shader_module
+        };
+
+        self.shader_modules = vec![vertex_shader_module, fragment_shader_module];
+
+        // Now, we'll link our dumb byte buffers (shader modules) together into
+        // shader stages, which are a little bit smarter.
+
+        let vertex_stage_info = vk::PipelineShaderStageCreateInfo {
+            s_type: vk::StructureType::PipelineShaderStageCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            stage: vk::SHADER_STAGE_VERTEX_BIT,
+            module: vertex_shader_module,
+            p_name: SHADER_ENTRYPOINT_NAME,
+            p_specialization_info: ptr::null(),
+        };
+
+        let fragment_stage_info = vk::PipelineShaderStageCreateInfo {
+            s_type: vk::StructureType::PipelineShaderStageCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            stage: vk::SHADER_STAGE_FRAGMENT_BIT,
+            module: fragment_shader_module,
+            p_name: SHADER_ENTRYPOINT_NAME,
+            p_specialization_info: ptr::null(),
+        };
+
+        self.shader_stages = vec![vertex_stage_info, fragment_stage_info];
+    }
 }
 
 fn main() {
@@ -130,30 +285,11 @@ fn main() {
 
     let surface_parameters = burgers.query_surface_parameters();
 
-    burgers.swapchain = create_swapchain(
-        &burgers.context.surface_extension,
-        &burgers.context.swapchain_extension,
-        burgers.context.physical_device,
-        burgers.context.surface,
-        &surface_parameters,
-    );
+    burgers.create_swapchain();
+    burgers.create_swapchain_images();
+    burgers.create_swapchain_image_views();
 
-    // Pull our list of images out from the swapchain, we'll need these later.
-    burgers.swapchain_images = burgers.context.swapchain_extension.get_swapchain_images_khr(burgers.swapchain)
-        .expect("Unable to get swapchain images!");
-
-    burgers.swapchain_image_views = create_swapchain_image_views(
-        &burgers.context.device,
-        &burgers.swapchain_images,
-        surface_parameters.format,
-    );
-
-    {
-        let (shader_modules, shader_stages) = create_shaders(&burgers.context.device);
-
-        burgers.shader_modules = shader_modules;
-        burgers.shader_stages = shader_stages;
-    }
+    burgers.create_shaders();
 
     {
         let (pipeline_layout, render_pass, graphics_pipeline) = create_graphics_pipeline(
@@ -255,77 +391,6 @@ fn main() {
 
         burgers.context.swapchain_extension.destroy_swapchain_khr(burgers.swapchain, None);
     }
-}
-
-///
-fn create_shaders<D>(
-    device: &D,
-) -> (Vec<vk::ShaderModule>, Vec<vk::PipelineShaderStageCreateInfo>)
-    where D: DeviceV1_0
-{
-    // Create our vertex and fragment shader modules.
-    let vertex_shader_module = {
-        let create_info = vk::ShaderModuleCreateInfo {
-            s_type: vk::StructureType::ShaderModuleCreateInfo,
-            p_next: ptr::null(),
-            flags: Default::default(),
-            code_size: VERTEX_SHADER.len(),
-            p_code: VERTEX_SHADER.as_ptr() as *const u32,
-        };
-
-        let shader_module = unsafe {
-            device.create_shader_module(&create_info, None)
-                .expect("Unable to create vertex shader module!")
-        };
-
-        shader_module
-    };
-
-    let fragment_shader_module = {
-        let create_info = vk::ShaderModuleCreateInfo {
-            s_type: vk::StructureType::ShaderModuleCreateInfo,
-            p_next: ptr::null(),
-            flags: Default::default(),
-            code_size: FRAGMENT_SHADER.len(),
-            p_code: FRAGMENT_SHADER.as_ptr() as *const u32,
-        };
-
-        let shader_module = unsafe {
-            device.create_shader_module(&create_info, None)
-                .expect("Unable to create fragment shader module!")
-        };
-
-        shader_module
-    };
-
-    let shader_modules = vec![vertex_shader_module, fragment_shader_module];
-
-    // Now, we'll link our dumb byte buffers (shader modules) together into
-    // shader stages, which are a little bit smarter.
-
-    let vertex_stage_info = vk::PipelineShaderStageCreateInfo {
-        s_type: vk::StructureType::PipelineShaderStageCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        stage: vk::SHADER_STAGE_VERTEX_BIT,
-        module: vertex_shader_module,
-        p_name: SHADER_ENTRYPOINT_NAME,
-        p_specialization_info: ptr::null(),
-    };
-
-    let fragment_stage_info = vk::PipelineShaderStageCreateInfo {
-        s_type: vk::StructureType::PipelineShaderStageCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        stage: vk::SHADER_STAGE_FRAGMENT_BIT,
-        module: fragment_shader_module,
-        p_name: SHADER_ENTRYPOINT_NAME,
-        p_specialization_info: ptr::null(),
-    };
-
-    let shader_stages = vec![vertex_stage_info, fragment_stage_info];
-
-    (shader_modules, shader_stages)
 }
 
 fn create_graphics_pipeline<D>(
@@ -547,52 +612,6 @@ fn create_graphics_pipeline<D>(
     (pipeline_layout, render_pass, graphics_pipeline)
 }
 
-fn create_swapchain_image_views<D>(
-    device: &D,
-    swapchain_images: &[vk::Image],
-    surface_format: vk::Format,
-) -> Vec<vk::ImageView>
-    where D: DeviceV1_0
-{
-    // To use our swapchain images, we need to construct image views that
-    // describe how to map color channels, access, etc.
-    let swapchain_image_views = swapchain_images
-        .iter()
-        .map(|&swapchain_image| {
-            let create_info = vk::ImageViewCreateInfo {
-                s_type: vk::StructureType::ImageViewCreateInfo,
-                p_next: ptr::null(),
-                flags: Default::default(),
-                image: swapchain_image,
-                view_type: vk::ImageViewType::Type2d,
-                format: surface_format,
-                components: vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::Identity,
-                    g: vk::ComponentSwizzle::Identity,
-                    b: vk::ComponentSwizzle::Identity,
-                    a: vk::ComponentSwizzle::Identity,
-                },
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::IMAGE_ASPECT_COLOR_BIT,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-            };
-
-            let image_view = unsafe {
-                device.create_image_view(&create_info, None)
-                    .expect("Failed to create image view for swapchain image!")
-            };
-
-            image_view
-        })
-        .collect::<Vec<_>>();
-
-    swapchain_image_views
-}
-
 fn create_swapchain_framebuffers<D>(
     device: &D,
     swapchain_image_views: &[vk::ImageView],
@@ -635,58 +654,6 @@ struct SurfaceParameters {
     color_space: vk::ColorSpaceKHR,
     swapchain_image_count: u32,
     capabilities: vk::SurfaceCapabilitiesKHR
-}
-
-fn create_swapchain(
-    surface_extension: &extensions::Surface,
-    swapchain_extension: &extensions::Swapchain,
-    physical_device: vk::PhysicalDevice,
-    surface: vk::SurfaceKHR,
-    surface_parameters: &SurfaceParameters,
-) -> vk::SwapchainKHR
-{
-    let present_modes = surface_extension
-        .get_physical_device_surface_present_modes_khr(physical_device, surface)
-        .expect("Unable to query surface present modes!");
-
-    // We prefer to use Mailbox mode for presenting, but if it isn't available,
-    // fall back to Fifo, which is guaranteed by the spec to be supported.
-    let present_mode = present_modes
-        .iter()
-        .cloned()
-        .find(|&mode| mode == vk::PresentModeKHR::Mailbox)
-        .unwrap_or(vk::PresentModeKHR::Fifo);
-
-    // Swapchains need a *lot* of information.
-    let swapchain_create_info = vk::SwapchainCreateInfoKHR {
-        s_type: vk::StructureType::SwapchainCreateInfoKhr,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        surface: surface,
-        min_image_count: surface_parameters.swapchain_image_count,
-        image_color_space: surface_parameters.color_space,
-        image_format: surface_parameters.format,
-        image_extent: surface_parameters.resolution,
-        image_array_layers: 1,
-        image_usage: vk::IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        image_sharing_mode: vk::SharingMode::Exclusive,
-        queue_family_index_count: 0,
-        p_queue_family_indices: ptr::null(),
-        pre_transform: surface_parameters.capabilities.current_transform,
-        composite_alpha: vk::COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        present_mode: present_mode,
-        clipped: 1,
-        old_swapchain: vk::SwapchainKHR::null(),
-    };
-
-    // After a long-winded setup, actually create our swapchain
-    let swapchain = unsafe {
-        swapchain_extension
-            .create_swapchain_khr(&swapchain_create_info, None)
-            .expect("Unable to create swapchain!")
-    };
-
-    swapchain
 }
 
 fn create_command_pool<D>(
