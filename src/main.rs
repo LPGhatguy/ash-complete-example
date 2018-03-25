@@ -275,59 +275,414 @@ impl RandomGarbage {
 
         self.shader_stages = vec![vertex_stage_info, fragment_stage_info];
     }
+
+    fn create_graphics_pipeline(&mut self) {
+        let surface_parameters = self.query_surface_parameters();
+
+        // Next, we need to describe what our vertex data looks like.
+        // Hint: there isn't any!
+        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
+            s_type: vk::StructureType::PipelineVertexInputStateCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            vertex_binding_description_count: 0,
+            p_vertex_binding_descriptions: ptr::null(),
+            vertex_attribute_description_count: 0,
+            p_vertex_attribute_descriptions: ptr::null(),
+        };
+
+        // What kind of geometry are we drawing today?
+        let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
+            s_type: vk::StructureType::PipelineInputAssemblyStateCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            topology: vk::PrimitiveTopology::TriangleList,
+            primitive_restart_enable: vk::VK_FALSE,
+        };
+
+        // Define our viewport and scissor to create a viewport state!
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: surface_parameters.resolution.width as f32,
+            height: surface_parameters.resolution.height as f32,
+            min_depth: 0.0,
+            max_depth: 0.0,
+        };
+
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D {
+                x: 0,
+                y: 0,
+            },
+            extent: surface_parameters.resolution,
+        };
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo {
+            s_type: vk::StructureType::PipelineViewportStateCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            viewport_count: 1,
+            p_viewports: &viewport,
+            scissor_count: 1,
+            p_scissors: &scissor,
+        };
+
+        // Define rasterizer state, with things like depth testing and face culling.
+        let rasterization_state = vk::PipelineRasterizationStateCreateInfo {
+            s_type: vk::StructureType::PipelineRasterizationStateCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            depth_clamp_enable: vk::VK_FALSE,
+            rasterizer_discard_enable: vk::VK_FALSE,
+            polygon_mode: vk::PolygonMode::Fill,
+            line_width: 1.0,
+            cull_mode: vk::CULL_MODE_BACK_BIT,
+            front_face: vk::FrontFace::Clockwise,
+            depth_bias_enable: vk::VK_FALSE,
+            depth_bias_constant_factor: 0.0,
+            depth_bias_clamp: 0.0,
+            depth_bias_slope_factor: 0.0,
+        };
+
+        // We don't want to multisampling, but we have to say so.
+        let multisample_state = vk::PipelineMultisampleStateCreateInfo {
+            s_type: vk::StructureType::PipelineMultisampleStateCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            sample_shading_enable: vk::VK_FALSE,
+            rasterization_samples: vk::SAMPLE_COUNT_1_BIT,
+            min_sample_shading: 1.0,
+            p_sample_mask: ptr::null(),
+            alpha_to_coverage_enable: vk::VK_FALSE,
+            alpha_to_one_enable: vk::VK_FALSE,
+        };
+
+        // Specify color blending, currently turned off.
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
+            color_write_mask: vk::COLOR_COMPONENT_R_BIT | vk::COLOR_COMPONENT_G_BIT | vk::COLOR_COMPONENT_B_BIT |
+                vk::COLOR_COMPONENT_A_BIT,
+            blend_enable: vk::VK_FALSE,
+            src_color_blend_factor: vk::BlendFactor::One,
+            dst_color_blend_factor: vk::BlendFactor::Zero,
+            color_blend_op: vk::BlendOp::Add,
+            src_alpha_blend_factor: vk::BlendFactor::One,
+            dst_alpha_blend_factor: vk::BlendFactor::Zero,
+            alpha_blend_op: vk::BlendOp::Add,
+        };
+
+        let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
+            s_type: vk::StructureType::PipelineColorBlendStateCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            logic_op_enable: vk::VK_FALSE,
+            logic_op: vk::LogicOp::Copy,
+            attachment_count: 1,
+            p_attachments: &color_blend_attachment,
+            blend_constants: [0.0, 0.0, 0.0, 0.0],
+        };
+
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+            s_type: vk::StructureType::PipelineLayoutCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            set_layout_count: 0,
+            p_set_layouts: ptr::null(),
+            push_constant_range_count: 0,
+            p_push_constant_ranges: ptr::null(),
+        };
+
+        self.pipeline_layout = unsafe {
+            self.context.device.create_pipeline_layout(&pipeline_layout_info, None)
+                .expect("Unable to create pipeline layout!")
+        };
+
+        // Create a color attachment to use our swapchain in our render pass.
+        let color_attachment = vk::AttachmentDescription {
+            flags: Default::default(),
+            format: surface_parameters.format,
+            samples: vk::SAMPLE_COUNT_1_BIT,
+            load_op: vk::AttachmentLoadOp::Clear,
+            store_op: vk::AttachmentStoreOp::Store,
+            stencil_load_op: vk::AttachmentLoadOp::DontCare,
+            stencil_store_op: vk::AttachmentStoreOp::DontCare,
+            initial_layout: vk::ImageLayout::Undefined,
+            final_layout: vk::ImageLayout::PresentSrcKhr,
+        };
+
+        let color_attachment_ref = vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::ColorAttachmentOptimal,
+        };
+
+        // Each render pass is comprised of one or more subpasses.
+        let subpass = vk::SubpassDescription {
+            flags: Default::default(),
+            pipeline_bind_point: vk::PipelineBindPoint::Graphics,
+            color_attachment_count: 1,
+            p_color_attachments: &color_attachment_ref,
+            p_resolve_attachments: ptr::null(),
+            input_attachment_count: 0,
+            p_input_attachments: ptr::null(),
+            p_depth_stencil_attachment: ptr::null(),
+            preserve_attachment_count: 0,
+            p_preserve_attachments: ptr::null(),
+        };
+
+        let dependency = vk::SubpassDependency {
+            dependency_flags: Default::default(),
+            src_subpass: vk::VK_SUBPASS_EXTERNAL,
+            dst_subpass: 0,
+            src_stage_mask: vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            src_access_mask: vk::AccessFlags::empty(),
+            dst_stage_mask: vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            dst_access_mask: vk::ACCESS_COLOR_ATTACHMENT_READ_BIT | vk::ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        };
+
+        let render_pass_info = vk::RenderPassCreateInfo {
+            s_type: vk::StructureType::RenderPassCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            attachment_count: 1,
+            p_attachments: &color_attachment,
+            subpass_count: 1,
+            p_subpasses: &subpass,
+            dependency_count: 1,
+            p_dependencies: &dependency,
+        };
+
+        self.render_pass = unsafe {
+            self.context.device.create_render_pass(&render_pass_info, None)
+                .expect("Failed to create render pass!")
+        };
+
+        // This is what the last hundreds of lines have been leading up to: actually
+        // creating a graphics pipeline.
+        //
+        // At this point, we still haven't actually accomplished anything, though.
+        let pipeline_info = vk::GraphicsPipelineCreateInfo {
+            s_type: vk::StructureType::GraphicsPipelineCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            stage_count: self.shader_stages.len() as u32,
+            p_stages: self.shader_stages.as_ptr(),
+            p_vertex_input_state: &vertex_input_state,
+            p_input_assembly_state: &input_assembly_state,
+            p_viewport_state: &viewport_state,
+            p_rasterization_state: &rasterization_state,
+            p_multisample_state: &multisample_state,
+            p_depth_stencil_state: ptr::null(),
+            p_color_blend_state: &color_blend_state,
+            p_dynamic_state: ptr::null(),
+            p_tessellation_state: ptr::null(),
+            layout: self.pipeline_layout,
+            render_pass: self.render_pass,
+            subpass: 0,
+            base_pipeline_handle: vk::Pipeline::null(),
+            base_pipeline_index: -1,
+        };
+
+        self.graphics_pipeline = unsafe {
+            self.context.device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+                .expect("Unable to create graphics pipeline!")[0]
+        };
+    }
+
+    fn create_swapchain_framebuffers(&mut self) {
+        let surface_parameters = self.query_surface_parameters();
+
+        // Create a framebuffer object for each image in our swapchain!
+        self.swapchain_framebuffers = self.swapchain_image_views
+            .iter()
+            .map(|&image_view| {
+                let framebuffer_info = vk::FramebufferCreateInfo {
+                    s_type: vk::StructureType::FramebufferCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    render_pass: self.render_pass,
+                    attachment_count: 1,
+                    p_attachments: &image_view,
+                    width: surface_parameters.resolution.width,
+                    height: surface_parameters.resolution.height,
+                    layers: 1,
+                };
+
+                let framebuffer = unsafe {
+                    self.context.device.create_framebuffer(&framebuffer_info, None)
+                        .expect("Unable to create framebuffer!")
+                };
+
+                framebuffer
+            })
+            .collect::<Vec<_>>();
+    }
+
+    fn create_command_pool(&mut self) {
+        // Create a command pool to allocate our command buffers from.
+        let command_pool_info = vk::CommandPoolCreateInfo {
+            s_type: vk::StructureType::CommandPoolCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            queue_family_index: self.context.the_queue,
+        };
+
+        self.command_pool = unsafe {
+            self.context.device.create_command_pool(&command_pool_info, None)
+                .expect("Unable to create command pool!")
+        };
+    }
+
+    fn create_command_buffers(&mut self) {
+        let surface_parameters = self.query_surface_parameters();
+
+        let command_buffers_info = vk::CommandBufferAllocateInfo {
+            s_type: vk::StructureType::CommandBufferAllocateInfo,
+            p_next: ptr::null(),
+            command_pool: self.command_pool,
+            level: vk::CommandBufferLevel::Primary,
+            command_buffer_count: self.swapchain_framebuffers.len() as u32,
+        };
+
+        self.command_buffers = unsafe {
+            self.context.device.allocate_command_buffers(&command_buffers_info)
+                .expect("Unable to allocate command buffers!")
+        };
+
+        for (index, &command_buffer) in self.command_buffers.iter().enumerate() {
+            let begin_info = vk::CommandBufferBeginInfo {
+                s_type: vk::StructureType::CommandBufferBeginInfo,
+                p_next: ptr::null(),
+                flags: vk::COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
+                p_inheritance_info: ptr::null(),
+            };
+
+            unsafe {
+                self.context.device.begin_command_buffer(command_buffer, &begin_info)
+                    .expect("Unable to begin command buffer!");
+            }
+
+            let clear_color = vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.39, 0.58, 0.93, 1.0],
+                },
+            };
+
+            let render_pass_info = vk::RenderPassBeginInfo {
+                s_type: vk::StructureType::RenderPassBeginInfo,
+                p_next: ptr::null(),
+                render_pass: self.render_pass,
+                framebuffer: self.swapchain_framebuffers[index],
+                render_area: vk::Rect2D {
+                    offset: vk::Offset2D {
+                        x: 0,
+                        y: 0,
+                    },
+                    extent: surface_parameters.resolution,
+                },
+                clear_value_count: 1,
+                p_clear_values: &clear_color,
+            };
+
+            unsafe {
+                self.context.device.cmd_begin_render_pass(command_buffer, &render_pass_info, vk::SubpassContents::Inline);
+                self.context.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::Graphics, self.graphics_pipeline);
+                self.context.device.cmd_draw(command_buffer,
+                    3, // vertex_count
+                    1, // instance_count
+                    0, // first_vertex
+                    0, // first_instance
+                );
+                self.context.device.cmd_end_render_pass(command_buffer);
+
+                self.context.device.end_command_buffer(command_buffer)
+                    .expect("Unable to end command buffer!");
+            }
+        }
+    }
+
+    fn create_semaphores(&mut self) {
+        let semaphore_info = vk::SemaphoreCreateInfo {
+            s_type: vk::StructureType::SemaphoreCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+        };
+
+        self.image_available_semaphore = unsafe {
+            self.context.device.create_semaphore(&semaphore_info, None)
+                .expect("Unable to create semaphore!")
+        };
+
+        self.render_finished_semaphore = unsafe {
+            self.context.device.create_semaphore(&semaphore_info, None)
+                .expect("Unable to create semaphore!")
+        };
+    }
+
+    fn render_frame(&mut self) {
+        let present_queue = unsafe {
+            self.context.device.get_device_queue(self.context.the_queue, 0)
+        };
+
+        let image_index = unsafe {
+            self.context.swapchain_extension.acquire_next_image_khr(self.swapchain, std::u64::MAX, self.image_available_semaphore, vk::Fence::null())
+                .expect("Unable to acquire next swapchain image!")
+        };
+
+        let wait_stages = [vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT];
+
+        let submit_info = vk::SubmitInfo {
+            s_type: vk::StructureType::SubmitInfo,
+            p_next: ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &self.image_available_semaphore,
+            p_wait_dst_stage_mask: wait_stages.as_ptr(),
+            signal_semaphore_count: 1,
+            p_signal_semaphores: &self.render_finished_semaphore,
+            command_buffer_count: 1,
+            p_command_buffers: &self.command_buffers[image_index as usize],
+        };
+
+        unsafe {
+            self.context.device.queue_submit(present_queue, &[submit_info], vk::Fence::null())
+                .expect("Unable to submit to queue!");
+        }
+
+        let present_info = vk::PresentInfoKHR {
+            s_type: vk::StructureType::PresentInfoKhr,
+            p_next: ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &self.render_finished_semaphore,
+            swapchain_count: 1,
+            p_swapchains: &self.swapchain,
+            p_image_indices: &image_index,
+            p_results: ptr::null_mut(),
+        };
+
+        unsafe {
+            self.context.swapchain_extension.queue_present_khr(present_queue, &present_info)
+                .expect("Unable to present!");
+        }
+    }
 }
 
 fn main() {
     let (window_width, window_height) = (800, 600);
 
-    let flexo = VulkanContext::new();
-    let mut burgers = RandomGarbage::new(flexo, (window_width, window_height));
-
-    let surface_parameters = burgers.query_surface_parameters();
+    let mut burgers = RandomGarbage::new(VulkanContext::new(), (window_width, window_height));
 
     burgers.create_swapchain();
     burgers.create_swapchain_images();
     burgers.create_swapchain_image_views();
 
     burgers.create_shaders();
+    burgers.create_graphics_pipeline();
 
-    {
-        let (pipeline_layout, render_pass, graphics_pipeline) = create_graphics_pipeline(
-            &burgers.context.device,
-            &burgers.shader_stages,
-            surface_parameters.resolution,
-            surface_parameters.format,
-        );
+    burgers.create_swapchain_framebuffers();
 
-        burgers.pipeline_layout = pipeline_layout;
-        burgers.render_pass = render_pass;
-        burgers.graphics_pipeline = graphics_pipeline;
-    }
+    burgers.create_command_pool();
+    burgers.create_command_buffers();
 
-    burgers.swapchain_framebuffers = create_swapchain_framebuffers(
-        &burgers.context.device,
-        &burgers.swapchain_image_views,
-        burgers.render_pass,
-        surface_parameters.resolution,
-    );
-
-    burgers.command_pool = create_command_pool(&burgers.context.device, burgers.context.the_queue);
-
-    burgers.command_buffers = create_command_buffers(
-        &burgers.context.device,
-        burgers.command_pool,
-        &burgers.swapchain_framebuffers,
-        burgers.render_pass,
-        &surface_parameters,
-        burgers.graphics_pipeline,
-    );
-
-    {
-        let (image_available_semaphore, render_finished_semaphore) = create_semaphores(&burgers.context.device);
-
-        burgers.image_available_semaphore = image_available_semaphore;
-        burgers.render_finished_semaphore = render_finished_semaphore;
-    }
+    burgers.create_semaphores();
 
     // It's main loop time!
     loop {
@@ -348,19 +703,7 @@ fn main() {
             break;
         }
 
-        let present_queue = unsafe {
-            burgers.context.device.get_device_queue(burgers.context.the_queue, 0)
-        };
-
-        render_frame(
-            &burgers.context.device,
-            &burgers.context.swapchain_extension,
-            burgers.swapchain,
-            burgers.image_available_semaphore,
-            burgers.render_finished_semaphore,
-            &burgers.command_buffers,
-            present_queue,
-        );
+        burgers.render_frame();
     }
 
     burgers.context.device.device_wait_idle()
@@ -393,440 +736,10 @@ fn main() {
     }
 }
 
-fn create_graphics_pipeline<D>(
-    device: &D,
-    shader_stages: &[vk::PipelineShaderStageCreateInfo],
-    surface_resolution: vk::Extent2D,
-    surface_format: vk::Format,
-) -> (vk::PipelineLayout, vk::RenderPass, vk::Pipeline)
-    where D: DeviceV1_0
-{
-    // Next, we need to describe what our vertex data looks like.
-    // Hint: there isn't any!
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
-        s_type: vk::StructureType::PipelineVertexInputStateCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        vertex_binding_description_count: 0,
-        p_vertex_binding_descriptions: ptr::null(),
-        vertex_attribute_description_count: 0,
-        p_vertex_attribute_descriptions: ptr::null(),
-    };
-
-    // What kind of geometry are we drawing today?
-    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
-        s_type: vk::StructureType::PipelineInputAssemblyStateCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        topology: vk::PrimitiveTopology::TriangleList,
-        primitive_restart_enable: vk::VK_FALSE,
-    };
-
-    // Define our viewport and scissor to create a viewport state!
-    let viewport = vk::Viewport {
-        x: 0.0,
-        y: 0.0,
-        width: surface_resolution.width as f32,
-        height: surface_resolution.height as f32,
-        min_depth: 0.0,
-        max_depth: 0.0,
-    };
-
-    let scissor = vk::Rect2D {
-        offset: vk::Offset2D {
-            x: 0,
-            y: 0,
-        },
-        extent: surface_resolution,
-    };
-
-    let viewport_state = vk::PipelineViewportStateCreateInfo {
-        s_type: vk::StructureType::PipelineViewportStateCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        viewport_count: 1,
-        p_viewports: &viewport,
-        scissor_count: 1,
-        p_scissors: &scissor,
-    };
-
-    // Define rasterizer state, with things like depth testing and face culling.
-    let rasterization_state = vk::PipelineRasterizationStateCreateInfo {
-        s_type: vk::StructureType::PipelineRasterizationStateCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        depth_clamp_enable: vk::VK_FALSE,
-        rasterizer_discard_enable: vk::VK_FALSE,
-        polygon_mode: vk::PolygonMode::Fill,
-        line_width: 1.0,
-        cull_mode: vk::CULL_MODE_BACK_BIT,
-        front_face: vk::FrontFace::Clockwise,
-        depth_bias_enable: vk::VK_FALSE,
-        depth_bias_constant_factor: 0.0,
-        depth_bias_clamp: 0.0,
-        depth_bias_slope_factor: 0.0,
-    };
-
-    // We don't want to multisampling, but we have to say so.
-    let multisample_state = vk::PipelineMultisampleStateCreateInfo {
-        s_type: vk::StructureType::PipelineMultisampleStateCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        sample_shading_enable: vk::VK_FALSE,
-        rasterization_samples: vk::SAMPLE_COUNT_1_BIT,
-        min_sample_shading: 1.0,
-        p_sample_mask: ptr::null(),
-        alpha_to_coverage_enable: vk::VK_FALSE,
-        alpha_to_one_enable: vk::VK_FALSE,
-    };
-
-    // Specify color blending, currently turned off.
-    let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
-        color_write_mask: vk::COLOR_COMPONENT_R_BIT | vk::COLOR_COMPONENT_G_BIT | vk::COLOR_COMPONENT_B_BIT |
-            vk::COLOR_COMPONENT_A_BIT,
-        blend_enable: vk::VK_FALSE,
-        src_color_blend_factor: vk::BlendFactor::One,
-        dst_color_blend_factor: vk::BlendFactor::Zero,
-        color_blend_op: vk::BlendOp::Add,
-        src_alpha_blend_factor: vk::BlendFactor::One,
-        dst_alpha_blend_factor: vk::BlendFactor::Zero,
-        alpha_blend_op: vk::BlendOp::Add,
-    };
-
-    let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
-        s_type: vk::StructureType::PipelineColorBlendStateCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        logic_op_enable: vk::VK_FALSE,
-        logic_op: vk::LogicOp::Copy,
-        attachment_count: 1,
-        p_attachments: &color_blend_attachment,
-        blend_constants: [0.0, 0.0, 0.0, 0.0],
-    };
-
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
-        s_type: vk::StructureType::PipelineLayoutCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        set_layout_count: 0,
-        p_set_layouts: ptr::null(),
-        push_constant_range_count: 0,
-        p_push_constant_ranges: ptr::null(),
-    };
-
-    let pipeline_layout = unsafe {
-        device.create_pipeline_layout(&pipeline_layout_info, None)
-            .expect("Unable to create pipeline layout!")
-    };
-
-    // Create a color attachment to use our swapchain in our render pass.
-    let color_attachment = vk::AttachmentDescription {
-        flags: Default::default(),
-        format: surface_format,
-        samples: vk::SAMPLE_COUNT_1_BIT,
-        load_op: vk::AttachmentLoadOp::Clear,
-        store_op: vk::AttachmentStoreOp::Store,
-        stencil_load_op: vk::AttachmentLoadOp::DontCare,
-        stencil_store_op: vk::AttachmentStoreOp::DontCare,
-        initial_layout: vk::ImageLayout::Undefined,
-        final_layout: vk::ImageLayout::PresentSrcKhr,
-    };
-
-    let color_attachment_ref = vk::AttachmentReference {
-        attachment: 0,
-        layout: vk::ImageLayout::ColorAttachmentOptimal,
-    };
-
-    // Each render pass is comprised of one or more subpasses.
-    let subpass = vk::SubpassDescription {
-        flags: Default::default(),
-        pipeline_bind_point: vk::PipelineBindPoint::Graphics,
-        color_attachment_count: 1,
-        p_color_attachments: &color_attachment_ref,
-        p_resolve_attachments: ptr::null(),
-        input_attachment_count: 0,
-        p_input_attachments: ptr::null(),
-        p_depth_stencil_attachment: ptr::null(),
-        preserve_attachment_count: 0,
-        p_preserve_attachments: ptr::null(),
-    };
-
-    let dependency = vk::SubpassDependency {
-        dependency_flags: Default::default(),
-        src_subpass: vk::VK_SUBPASS_EXTERNAL,
-        dst_subpass: 0,
-        src_stage_mask: vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        src_access_mask: vk::AccessFlags::empty(),
-        dst_stage_mask: vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        dst_access_mask: vk::ACCESS_COLOR_ATTACHMENT_READ_BIT | vk::ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-    };
-
-    let render_pass_info = vk::RenderPassCreateInfo {
-        s_type: vk::StructureType::RenderPassCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        attachment_count: 1,
-        p_attachments: &color_attachment,
-        subpass_count: 1,
-        p_subpasses: &subpass,
-        dependency_count: 1,
-        p_dependencies: &dependency,
-    };
-
-    let render_pass = unsafe {
-        device.create_render_pass(&render_pass_info, None)
-            .expect("Failed to create render pass!")
-    };
-
-    // This is what the last hundreds of lines have been leading up to: actually
-    // creating a graphics pipeline.
-    //
-    // At this point, we still haven't actually accomplished anything, though.
-    let pipeline_info = vk::GraphicsPipelineCreateInfo {
-        s_type: vk::StructureType::GraphicsPipelineCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        stage_count: shader_stages.len() as u32,
-        p_stages: shader_stages.as_ptr(),
-        p_vertex_input_state: &vertex_input_state,
-        p_input_assembly_state: &input_assembly_state,
-        p_viewport_state: &viewport_state,
-        p_rasterization_state: &rasterization_state,
-        p_multisample_state: &multisample_state,
-        p_depth_stencil_state: ptr::null(),
-        p_color_blend_state: &color_blend_state,
-        p_dynamic_state: ptr::null(),
-        p_tessellation_state: ptr::null(),
-        layout: pipeline_layout,
-        render_pass: render_pass,
-        subpass: 0,
-        base_pipeline_handle: vk::Pipeline::null(),
-        base_pipeline_index: -1,
-    };
-
-    let graphics_pipeline = unsafe {
-        device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
-            .expect("Unable to create graphics pipeline!")[0]
-    };
-
-    (pipeline_layout, render_pass, graphics_pipeline)
-}
-
-fn create_swapchain_framebuffers<D>(
-    device: &D,
-    swapchain_image_views: &[vk::ImageView],
-    render_pass: vk::RenderPass,
-    surface_resolution: vk::Extent2D,
-) -> Vec<vk::Framebuffer>
-    where D: DeviceV1_0
-{
-    // Create a framebuffer object for each image in our swapchain!
-    let swapchain_framebuffers = swapchain_image_views
-        .iter()
-        .map(|&image_view| {
-            let framebuffer_info = vk::FramebufferCreateInfo {
-                s_type: vk::StructureType::FramebufferCreateInfo,
-                p_next: ptr::null(),
-                flags: Default::default(),
-                render_pass: render_pass,
-                attachment_count: 1,
-                p_attachments: &image_view,
-                width: surface_resolution.width,
-                height: surface_resolution.height,
-                layers: 1,
-            };
-
-            let framebuffer = unsafe {
-                device.create_framebuffer(&framebuffer_info, None)
-                    .expect("Unable to create framebuffer!")
-            };
-
-            framebuffer
-        })
-        .collect::<Vec<_>>();
-
-    swapchain_framebuffers
-}
-
 struct SurfaceParameters {
     resolution: vk::Extent2D,
     format: vk::Format,
     color_space: vk::ColorSpaceKHR,
     swapchain_image_count: u32,
     capabilities: vk::SurfaceCapabilitiesKHR
-}
-
-fn create_command_pool<D>(
-    device: &D,
-    queue_family_index: u32,
-) -> vk::CommandPool
-    where D: DeviceV1_0
-{
-    // Create a command pool to allocate our command buffers from.
-    let command_pool_info = vk::CommandPoolCreateInfo {
-        s_type: vk::StructureType::CommandPoolCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-        queue_family_index: queue_family_index,
-    };
-
-    let command_pool = unsafe {
-        device.create_command_pool(&command_pool_info, None)
-            .expect("Unable to create command pool!")
-    };
-
-    command_pool
-}
-
-fn create_command_buffers<D>(
-    device: &D,
-    command_pool: vk::CommandPool,
-    swapchain_framebuffers: &[vk::Framebuffer],
-    render_pass: vk::RenderPass,
-    surface_parameters: &SurfaceParameters,
-    graphics_pipeline: vk::Pipeline,
-) -> Vec<vk::CommandBuffer>
-    where D: DeviceV1_0
-{
-    let command_buffers_info = vk::CommandBufferAllocateInfo {
-        s_type: vk::StructureType::CommandBufferAllocateInfo,
-        p_next: ptr::null(),
-        command_pool: command_pool,
-        level: vk::CommandBufferLevel::Primary,
-        command_buffer_count: swapchain_framebuffers.len() as u32,
-    };
-
-    let command_buffers = unsafe {
-        device.allocate_command_buffers(&command_buffers_info)
-            .expect("Unable to allocate command buffers!")
-    };
-
-    for (index, &command_buffer) in command_buffers.iter().enumerate() {
-        let begin_info = vk::CommandBufferBeginInfo {
-            s_type: vk::StructureType::CommandBufferBeginInfo,
-            p_next: ptr::null(),
-            flags: vk::COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
-            p_inheritance_info: ptr::null(),
-        };
-
-        unsafe {
-            device.begin_command_buffer(command_buffer, &begin_info)
-                .expect("Unable to begin command buffer!");
-        }
-
-        let clear_color = vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: [0.39, 0.58, 0.93, 1.0],
-            },
-        };
-
-        let render_pass_info = vk::RenderPassBeginInfo {
-            s_type: vk::StructureType::RenderPassBeginInfo,
-            p_next: ptr::null(),
-            render_pass: render_pass,
-            framebuffer: swapchain_framebuffers[index],
-            render_area: vk::Rect2D {
-                offset: vk::Offset2D {
-                    x: 0,
-                    y: 0,
-                },
-                extent: surface_parameters.resolution,
-            },
-            clear_value_count: 1,
-            p_clear_values: &clear_color,
-        };
-
-        unsafe {
-            device.cmd_begin_render_pass(command_buffer, &render_pass_info, vk::SubpassContents::Inline);
-            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::Graphics, graphics_pipeline);
-            device.cmd_draw(command_buffer,
-                3, // vertex_count
-                1, // instance_count
-                0, // first_vertex
-                0, // first_instance
-            );
-            device.cmd_end_render_pass(command_buffer);
-
-            device.end_command_buffer(command_buffer)
-                .expect("Unable to end command buffer!");
-        }
-    }
-
-    command_buffers
-}
-
-fn create_semaphores<D>(
-    device: &D,
-) -> (vk::Semaphore, vk::Semaphore)
-    where D: DeviceV1_0
-{
-    let semaphore_info = vk::SemaphoreCreateInfo {
-        s_type: vk::StructureType::SemaphoreCreateInfo,
-        p_next: ptr::null(),
-        flags: Default::default(),
-    };
-
-    let image_available_semaphore = unsafe {
-        device.create_semaphore(&semaphore_info, None)
-            .expect("Unable to create semaphore!")
-    };
-
-    let render_finished_semaphore = unsafe {
-        device.create_semaphore(&semaphore_info, None)
-            .expect("Unable to create semaphore!")
-    };
-
-    (image_available_semaphore, render_finished_semaphore)
-}
-
-fn render_frame<D>(
-    device: &D,
-    swapchain_extension: &extensions::Swapchain,
-    swapchain: vk::SwapchainKHR,
-    image_available_semaphore: vk::Semaphore,
-    render_finished_semaphore: vk::Semaphore,
-    command_buffers: &[vk::CommandBuffer],
-    present_queue: vk::Queue,
-)
-    where D: DeviceV1_0
-{
-    let image_index = unsafe {
-        swapchain_extension.acquire_next_image_khr(swapchain, std::u64::MAX, image_available_semaphore, vk::Fence::null())
-            .expect("Unable to acquire next swapchain image!")
-    };
-
-    let wait_stages = [vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT];
-
-    let submit_info = vk::SubmitInfo {
-        s_type: vk::StructureType::SubmitInfo,
-        p_next: ptr::null(),
-        wait_semaphore_count: 1,
-        p_wait_semaphores: &image_available_semaphore,
-        p_wait_dst_stage_mask: wait_stages.as_ptr(),
-        signal_semaphore_count: 1,
-        p_signal_semaphores: &render_finished_semaphore,
-        command_buffer_count: 1,
-        p_command_buffers: &command_buffers[image_index as usize],
-    };
-
-    unsafe {
-        device.queue_submit(present_queue, &[submit_info], vk::Fence::null())
-            .expect("Unable to submit to queue!");
-    }
-
-    let present_info = vk::PresentInfoKHR {
-        s_type: vk::StructureType::PresentInfoKhr,
-        p_next: ptr::null(),
-        wait_semaphore_count: 1,
-        p_wait_semaphores: &render_finished_semaphore,
-        swapchain_count: 1,
-        p_swapchains: &swapchain,
-        p_image_indices: &image_index,
-        p_results: ptr::null_mut(),
-    };
-
-    unsafe {
-        swapchain_extension.queue_present_khr(present_queue, &present_info)
-            .expect("Unable to present!");
-    }
 }
