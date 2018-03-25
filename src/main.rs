@@ -13,8 +13,7 @@ use std::default::Default;
 use std::ptr;
 
 use ash::vk;
-use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
-use ash::extensions;
+use ash::version::{DeviceV1_0};
 
 use context::VulkanContext;
 
@@ -624,8 +623,21 @@ impl RandomGarbage {
         };
 
         let image_index = unsafe {
-            self.context.swapchain_extension.acquire_next_image_khr(self.swapchain, std::u64::MAX, self.image_available_semaphore, vk::Fence::null())
-                .expect("Unable to acquire next swapchain image!")
+            let result = self.context.swapchain_extension.acquire_next_image_khr(
+                self.swapchain,
+                std::u64::MAX,
+                self.image_available_semaphore,
+                vk::Fence::null()
+            );
+
+            match result {
+                Ok(v) => v,
+                Err(vk::Result::ErrorOutOfDateKhr) | Err(vk::Result::SuboptimalKhr) => {
+                    self.recreate_swapchain();
+                    return;
+                },
+                Err(_) => panic!("Unable to acquire next image!"),
+            }
         };
 
         let wait_stages = [vk::PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT];
@@ -659,8 +671,73 @@ impl RandomGarbage {
         };
 
         unsafe {
-            self.context.swapchain_extension.queue_present_khr(present_queue, &present_info)
-                .expect("Unable to present!");
+            let result = self.context.swapchain_extension.queue_present_khr(present_queue, &present_info);
+
+            match result {
+                Ok(_) => (),
+                Err(vk::Result::ErrorOutOfDateKhr) | Err(vk::Result::SuboptimalKhr) => {
+                    self.recreate_swapchain();
+                    return;
+                },
+                Err(_) => panic!("Unable to present!"),
+            }
+        }
+    }
+
+    fn cleanup_swapchain(&mut self) {
+        unsafe {
+            for &framebuffer in &self.swapchain_framebuffers {
+                self.context.device.destroy_framebuffer(framebuffer, None);
+            }
+
+            self.context.device.free_command_buffers(self.command_pool, &self.command_buffers);
+            self.command_buffers = Vec::new();
+
+            self.context.device.destroy_pipeline(self.graphics_pipeline, None);
+            self.context.device.destroy_render_pass(self.render_pass, None);
+            self.context.device.destroy_pipeline_layout(self.pipeline_layout, None);
+
+            for &image_view in &self.swapchain_image_views {
+                self.context.device.destroy_image_view(image_view, None);
+            }
+
+            self.context.swapchain_extension.destroy_swapchain_khr(self.swapchain, None);
+        }
+    }
+
+    fn recreate_swapchain(&mut self) {
+        self.context.device.device_wait_idle()
+            .expect("Unable to wait for device to idle!");
+
+        self.cleanup_swapchain();
+
+        self.create_swapchain();
+        self.create_swapchain_images();
+        self.create_swapchain_image_views();
+
+        self.create_graphics_pipeline();
+
+        self.create_swapchain_framebuffers();
+
+        self.create_command_buffers();
+    }
+
+    fn cleanup(mut self) {
+        self.context.device.device_wait_idle()
+            .expect("Unable to wait for device to idle!");
+
+        // Make sure you clean up after yourself!
+        unsafe {
+            self.context.device.destroy_semaphore(self.image_available_semaphore, None);
+            self.context.device.destroy_semaphore(self.render_finished_semaphore, None);
+
+            self.cleanup_swapchain();
+
+            self.context.device.destroy_command_pool(self.command_pool, None);
+
+            for &shader_module in &self.shader_modules {
+                self.context.device.destroy_shader_module(shader_module, None);
+            }
         }
     }
 }
@@ -670,11 +747,12 @@ fn main() {
 
     let mut burgers = RandomGarbage::new(VulkanContext::new(), (window_width, window_height));
 
+    burgers.create_shaders();
+
     burgers.create_swapchain();
     burgers.create_swapchain_images();
     burgers.create_swapchain_image_views();
 
-    burgers.create_shaders();
     burgers.create_graphics_pipeline();
 
     burgers.create_swapchain_framebuffers();
@@ -687,6 +765,8 @@ fn main() {
     // It's main loop time!
     loop {
         let mut quit = false;
+        let mut resize_to = None;
+
         burgers.context.events_loop.poll_events(|event| {
             match event {
                 winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
@@ -694,10 +774,17 @@ fn main() {
                 },
                 winit::Event::WindowEvent { event: winit::WindowEvent::Resized(width, height), ..} => {
                     println!("Window resized to {}, {}", width, height);
+
+                    resize_to = Some((width, height))
                 },
                 _ => ()
             }
         });
+
+        if let Some(dimensions) = resize_to {
+            burgers.window_size = dimensions;
+            burgers.recreate_swapchain();
+        }
 
         if quit {
             break;
@@ -706,34 +793,7 @@ fn main() {
         burgers.render_frame();
     }
 
-    burgers.context.device.device_wait_idle()
-        .expect("Unable to wait for device to idle? (huh)");
-
-    // Make sure you clean up after yourself!
-    unsafe {
-        burgers.context.device.destroy_semaphore(burgers.image_available_semaphore, None);
-        burgers.context.device.destroy_semaphore(burgers.render_finished_semaphore, None);
-
-        burgers.context.device.destroy_command_pool(burgers.command_pool, None);
-
-        for &framebuffer in &burgers.swapchain_framebuffers {
-            burgers.context.device.destroy_framebuffer(framebuffer, None);
-        }
-
-        burgers.context.device.destroy_pipeline(burgers.graphics_pipeline, None);
-        burgers.context.device.destroy_render_pass(burgers.render_pass, None);
-        burgers.context.device.destroy_pipeline_layout(burgers.pipeline_layout, None);
-
-        for &shader_module in &burgers.shader_modules {
-            burgers.context.device.destroy_shader_module(shader_module, None);
-        }
-
-        for &image_view in &burgers.swapchain_image_views {
-            burgers.context.device.destroy_image_view(image_view, None);
-        }
-
-        burgers.context.swapchain_extension.destroy_swapchain_khr(burgers.swapchain, None);
-    }
+    burgers.cleanup();
 }
 
 struct SurfaceParameters {
