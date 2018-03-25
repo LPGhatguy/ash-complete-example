@@ -33,7 +33,7 @@ lazy_static! {
     static ref TRIANGLE_VERTICES: Vec<Vertex> = vec![
         Vertex {
             position: Vector2::new(0.0, -0.5),
-            color: Vector3::new(1.0, 0.0, 1.0),
+            color: Vector3::new(1.0, 0.0, 0.0),
         },
         Vertex {
             position: Vector2::new(0.5, 0.5),
@@ -593,8 +593,7 @@ impl TwoStrokeApp {
             let mapped_memory = self.context.device.map_memory(self.vertex_buffer_memory, 0, memory_requirements.size, vk::MemoryMapFlags::empty())
                 .expect("Unable to map memory!");
 
-            let mut vertices = TRIANGLE_VERTICES.clone();
-            ptr::copy(vertices.as_mut_ptr(), mapped_memory as *mut _, vertices.len());
+            ptr::copy(TRIANGLE_VERTICES.as_ptr(), mapped_memory as *mut _, TRIANGLE_VERTICES.len());
 
             self.context.device.unmap_memory(self.vertex_buffer_memory);
         }
