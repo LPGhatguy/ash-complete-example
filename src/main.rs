@@ -1,20 +1,25 @@
-#[macro_use]
-extern crate ash;
+#[macro_use] extern crate ash;
 extern crate cgmath;
+#[macro_use] extern crate lazy_static;
+#[macro_use] extern crate memoffset;
 extern crate winapi;
 extern crate winit;
 
 #[macro_use]
 mod cstr;
-
 mod context;
+mod vertex;
 
 use std::default::Default;
 use std::ptr;
+use std::mem;
 
 use ash::vk;
-use ash::version::{DeviceV1_0};
+use ash::version::{DeviceV1_0, InstanceV1_0};
 
+use cgmath::{Vector2, Vector3};
+
+use vertex::Vertex;
 use context::VulkanContext;
 
 // Rust lets us statically embed built shaders straight into our binary!
@@ -24,6 +29,23 @@ static FRAGMENT_SHADER: &'static [u8] = include_bytes!(concat!(env!("OUT_DIR"), 
 // Our shaders all use the entrypoint 'main'
 const SHADER_ENTRYPOINT_NAME: *const i8 = cstr!("main");
 
+lazy_static! {
+    static ref TRIANGLE_VERTICES: Vec<Vertex> = vec![
+        Vertex {
+            position: Vector2::new(0.0, -0.5),
+            color: Vector3::new(1.0, 0.0, 0.0),
+        },
+        Vertex {
+            position: Vector2::new(0.5, 0.5),
+            color: Vector3::new(0.0, 1.0, 0.0),
+        },
+        Vertex {
+            position: Vector2::new(-0.5, 0.5),
+            color: Vector3::new(0.0, 0.0, 1.0),
+        },
+    ];
+}
+
 struct SurfaceParameters {
     resolution: vk::Extent2D,
     format: vk::Format,
@@ -32,7 +54,7 @@ struct SurfaceParameters {
     capabilities: vk::SurfaceCapabilitiesKHR,
 }
 
-struct RandomGarbage {
+struct TwoStrokeApp {
     context: VulkanContext,
     window_size: (u32, u32),
     surface_parameters: SurfaceParameters,
@@ -50,6 +72,9 @@ struct RandomGarbage {
 
     swapchain_framebuffers: Vec<vk::Framebuffer>,
 
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
+
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
 
@@ -57,11 +82,11 @@ struct RandomGarbage {
     render_finished_semaphore: vk::Semaphore,
 }
 
-impl RandomGarbage {
-    fn new(context: VulkanContext, window_size: (u32, u32)) -> RandomGarbage {
-        let surface_parameters = RandomGarbage::query_surface_parameters(&context, window_size);
+impl TwoStrokeApp {
+    fn new(context: VulkanContext, window_size: (u32, u32)) -> TwoStrokeApp {
+        let surface_parameters = TwoStrokeApp::query_surface_parameters(&context, window_size);
 
-        RandomGarbage {
+        TwoStrokeApp {
             context,
             window_size,
             surface_parameters,
@@ -78,6 +103,9 @@ impl RandomGarbage {
             graphics_pipeline: vk::Pipeline::null(),
 
             swapchain_framebuffers: Vec::new(),
+
+            vertex_buffer: vk::Buffer::null(),
+            vertex_buffer_memory: vk::DeviceMemory::null(),
 
             command_pool: vk::CommandPool::null(),
             command_buffers: Vec::new(),
@@ -285,15 +313,17 @@ impl RandomGarbage {
 
     fn create_graphics_pipeline(&mut self) {
         // Next, we need to describe what our vertex data looks like.
-        // Hint: there isn't any!
+        let binding_description = Vertex::get_binding_description();
+        let attribute_descriptions = Vertex::get_attribute_descriptions();
+
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
             s_type: vk::StructureType::PipelineVertexInputStateCreateInfo,
             p_next: ptr::null(),
             flags: Default::default(),
-            vertex_binding_description_count: 0,
-            p_vertex_binding_descriptions: ptr::null(),
-            vertex_attribute_description_count: 0,
-            p_vertex_attribute_descriptions: ptr::null(),
+            vertex_binding_description_count: 1,
+            p_vertex_binding_descriptions: &binding_description,
+            vertex_attribute_description_count: 2,
+            p_vertex_attribute_descriptions: attribute_descriptions.as_ptr(),
         };
 
         // What kind of geometry are we drawing today?
@@ -520,6 +550,74 @@ impl RandomGarbage {
             .collect::<Vec<_>>();
     }
 
+    fn create_vertex_buffer(&mut self) {
+        let buffer_info = vk::BufferCreateInfo {
+            s_type: vk::StructureType::BufferCreateInfo,
+            p_next: ptr::null(),
+            flags: vk::BufferCreateFlags::empty(),
+            size: (mem::size_of::<Vertex>() * TRIANGLE_VERTICES.len()) as u64,
+            usage: vk::BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            sharing_mode: vk::SharingMode::Exclusive,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+        };
+
+        self.vertex_buffer = unsafe {
+            self.context.device.create_buffer(&buffer_info, None)
+                .expect("Unable to create vertex buffer!")
+        };
+
+        let memory_requirements = self.context.device.get_buffer_memory_requirements(self.vertex_buffer);
+
+        let memory_type = self.find_memory_type(memory_requirements.memory_type_bits, vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT)
+            .expect("Unable to find suitable memory type!");
+
+        let alloc_info = vk::MemoryAllocateInfo {
+            s_type: vk::StructureType::MemoryAllocateInfo,
+            p_next: ptr::null(),
+            allocation_size: memory_requirements.size,
+            memory_type_index: memory_type,
+        };
+
+        self.vertex_buffer_memory = unsafe {
+            self.context.device.allocate_memory(&alloc_info, None)
+                .expect("Unable to allocate memory!")
+        };
+
+        unsafe {
+            self.context.device.bind_buffer_memory(self.vertex_buffer, self.vertex_buffer_memory, 0)
+                .expect("Unable to bind buffer memory!");
+        }
+
+        unsafe {
+            let mapped_memory = self.context.device.map_memory(self.vertex_buffer_memory, 0, memory_requirements.size, vk::MemoryMapFlags::empty())
+                .expect("Unable to map memory!");
+
+            let mut vertices = TRIANGLE_VERTICES.clone();
+            ptr::copy(vertices.as_mut_ptr(), mapped_memory as *mut _, vertices.len());
+
+            self.context.device.unmap_memory(self.vertex_buffer_memory);
+        }
+    }
+
+    fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> Option<u32> {
+        let memory_properties = self.context.instance.get_physical_device_memory_properties(self.context.physical_device);
+
+        for index in 0..memory_properties.memory_type_count {
+            // We should only return memory in our type_filter
+            if type_filter & (1 << index) == 0 {
+                continue;
+            }
+
+            let memory = &memory_properties.memory_types[index as usize];
+            if memory.property_flags == properties {
+                return Some(index);
+            }
+        }
+
+        None
+    }
+
     fn create_command_pool(&mut self) {
         // Create a command pool to allocate our command buffers from.
         let command_pool_info = vk::CommandPoolCreateInfo {
@@ -587,6 +685,9 @@ impl RandomGarbage {
             unsafe {
                 self.context.device.cmd_begin_render_pass(command_buffer, &render_pass_info, vk::SubpassContents::Inline);
                 self.context.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::Graphics, self.graphics_pipeline);
+
+                self.context.device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.vertex_buffer], &[0]);
+
                 self.context.device.cmd_draw(command_buffer,
                     3, // vertex_count
                     1, // instance_count
@@ -735,6 +836,9 @@ impl RandomGarbage {
 
             self.cleanup_swapchain();
 
+            self.context.device.destroy_buffer(self.vertex_buffer, None);
+            self.context.device.free_memory(self.vertex_buffer_memory, None);
+
             self.context.device.destroy_command_pool(self.command_pool, None);
 
             for &shader_module in &self.shader_modules {
@@ -747,29 +851,31 @@ impl RandomGarbage {
 fn main() {
     let (window_width, window_height) = (800, 600);
 
-    let mut burgers = RandomGarbage::new(VulkanContext::new(), (window_width, window_height));
+    let mut the_app = TwoStrokeApp::new(VulkanContext::new(), (window_width, window_height));
 
-    burgers.create_shaders();
+    the_app.create_shaders();
 
-    burgers.create_swapchain();
-    burgers.create_swapchain_images();
-    burgers.create_swapchain_image_views();
+    the_app.create_swapchain();
+    the_app.create_swapchain_images();
+    the_app.create_swapchain_image_views();
 
-    burgers.create_graphics_pipeline();
+    the_app.create_graphics_pipeline();
 
-    burgers.create_swapchain_framebuffers();
+    the_app.create_swapchain_framebuffers();
 
-    burgers.create_command_pool();
-    burgers.create_command_buffers();
+    the_app.create_vertex_buffer();
 
-    burgers.create_semaphores();
+    the_app.create_command_pool();
+    the_app.create_command_buffers();
+
+    the_app.create_semaphores();
 
     // It's main loop time!
     loop {
         let mut quit = false;
         let mut resize_to = None;
 
-        burgers.context.events_loop.poll_events(|event| {
+        the_app.context.events_loop.poll_events(|event| {
             match event {
                 winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => {
                     quit = true;
@@ -782,17 +888,17 @@ fn main() {
         });
 
         if let Some(dimensions) = resize_to {
-            burgers.window_size = dimensions;
-            burgers.surface_parameters = RandomGarbage::query_surface_parameters(&burgers.context, dimensions);
-            burgers.recreate_swapchain();
+            the_app.window_size = dimensions;
+            the_app.surface_parameters = TwoStrokeApp::query_surface_parameters(&the_app.context, dimensions);
+            the_app.recreate_swapchain();
         }
 
         if quit {
             break;
         }
 
-        burgers.render_frame();
+        the_app.render_frame();
     }
 
-    burgers.cleanup();
+    the_app.cleanup();
 }
