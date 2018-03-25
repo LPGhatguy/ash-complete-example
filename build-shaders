@@ -1,6 +1,0 @@
-#!/bin/sh
-
-mkdir -p built-shaders
-
-glslc -o built-shaders/triangle-vert.spv shaders/triangle.vert
-glslc -o built-shaders/triangle-frag.spv shaders/triangle.frag

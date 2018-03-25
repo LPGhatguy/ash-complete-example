@@ -18,8 +18,8 @@ use ash::version::{DeviceV1_0};
 use context::VulkanContext;
 
 // Rust lets us statically embed built shaders straight into our binary!
-static VERTEX_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-vert.spv");
-static FRAGMENT_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangle-frag.spv");
+static VERTEX_SHADER: &'static [u8] = include_bytes!(concat!(env!("OUT_DIR"), "/triangle-vert.spv"));
+static FRAGMENT_SHADER: &'static [u8] = include_bytes!(concat!(env!("OUT_DIR"), "/triangle-frag.spv"));
 
 // Our shaders all use the entrypoint 'main'
 const SHADER_ENTRYPOINT_NAME: *const i8 = cstr!("main");
