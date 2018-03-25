@@ -24,9 +24,18 @@ static FRAGMENT_SHADER: &'static [u8] = include_bytes!("../built-shaders/triangl
 // Our shaders all use the entrypoint 'main'
 const SHADER_ENTRYPOINT_NAME: *const i8 = cstr!("main");
 
+struct SurfaceParameters {
+    resolution: vk::Extent2D,
+    format: vk::Format,
+    color_space: vk::ColorSpaceKHR,
+    swapchain_image_count: u32,
+    capabilities: vk::SurfaceCapabilitiesKHR,
+}
+
 struct RandomGarbage {
     context: VulkanContext,
     window_size: (u32, u32),
+    surface_parameters: SurfaceParameters,
 
     swapchain: vk::SwapchainKHR,
     swapchain_images: Vec<vk::Image>,
@@ -50,9 +59,12 @@ struct RandomGarbage {
 
 impl RandomGarbage {
     fn new(context: VulkanContext, window_size: (u32, u32)) -> RandomGarbage {
+        let surface_parameters = RandomGarbage::query_surface_parameters(&context, window_size);
+
         RandomGarbage {
             context,
             window_size,
+            surface_parameters,
 
             swapchain: vk::SwapchainKHR::null(),
             swapchain_images: Vec::new(),
@@ -75,9 +87,9 @@ impl RandomGarbage {
         }
     }
 
-    fn query_surface_parameters(&self) -> SurfaceParameters {
-        let surface_formats = self.context.surface_extension
-            .get_physical_device_surface_formats_khr(self.context.physical_device, self.context.surface)
+    fn query_surface_parameters(context: &VulkanContext, window_size: (u32, u32)) -> SurfaceParameters {
+        let surface_formats = context.surface_extension
+            .get_physical_device_surface_formats_khr(context.physical_device, context.surface)
             .expect("Failed to query supported surface formats!");
 
         // Blindly pick the first surface format the system reports as supported.
@@ -86,8 +98,8 @@ impl RandomGarbage {
             .get(0)
             .expect("Unable to find a surface format!");
 
-        let surface_capabilities = self.context.surface_extension
-            .get_physical_device_surface_capabilities_khr(self.context.physical_device, self.context.surface)
+        let surface_capabilities = context.surface_extension
+            .get_physical_device_surface_capabilities_khr(context.physical_device, context.surface)
             .expect("Unable to query surface capabilities!");
 
         // Use the minimum number of images that our surface supports, plus one to
@@ -105,8 +117,8 @@ impl RandomGarbage {
         // is determined by the swapchain.
         let surface_resolution = match surface_capabilities.current_extent.width {
             std::u32::MAX => vk::Extent2D {
-                width: self.window_size.0,
-                height: self.window_size.1,
+                width: window_size.0,
+                height: window_size.1,
             },
             _ => surface_capabilities.current_extent,
         };
@@ -121,8 +133,6 @@ impl RandomGarbage {
     }
 
     fn create_swapchain(&mut self) {
-        let surface_parameters = self.query_surface_parameters();
-
         let present_modes = self.context.surface_extension
             .get_physical_device_surface_present_modes_khr(self.context.physical_device, self.context.surface)
             .expect("Unable to query surface present modes!");
@@ -141,16 +151,16 @@ impl RandomGarbage {
             p_next: ptr::null(),
             flags: Default::default(),
             surface: self.context.surface,
-            min_image_count: surface_parameters.swapchain_image_count,
-            image_color_space: surface_parameters.color_space,
-            image_format: surface_parameters.format,
-            image_extent: surface_parameters.resolution,
+            min_image_count: self.surface_parameters.swapchain_image_count,
+            image_color_space: self.surface_parameters.color_space,
+            image_format: self.surface_parameters.format,
+            image_extent: self.surface_parameters.resolution,
             image_array_layers: 1,
             image_usage: vk::IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
             image_sharing_mode: vk::SharingMode::Exclusive,
             queue_family_index_count: 0,
             p_queue_family_indices: ptr::null(),
-            pre_transform: surface_parameters.capabilities.current_transform,
+            pre_transform: self.surface_parameters.capabilities.current_transform,
             composite_alpha: vk::COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
             present_mode: present_mode,
             clipped: 1,
@@ -172,8 +182,6 @@ impl RandomGarbage {
     }
 
     fn create_swapchain_image_views(&mut self) {
-        let surface_parameters = self.query_surface_parameters();
-
         // To use our swapchain images, we need to construct image views that
         // describe how to map color channels, access, etc.
         self.swapchain_image_views = self.swapchain_images
@@ -185,7 +193,7 @@ impl RandomGarbage {
                     flags: Default::default(),
                     image: swapchain_image,
                     view_type: vk::ImageViewType::Type2d,
-                    format: surface_parameters.format,
+                    format: self.surface_parameters.format,
                     components: vk::ComponentMapping {
                         r: vk::ComponentSwizzle::Identity,
                         g: vk::ComponentSwizzle::Identity,
@@ -276,8 +284,6 @@ impl RandomGarbage {
     }
 
     fn create_graphics_pipeline(&mut self) {
-        let surface_parameters = self.query_surface_parameters();
-
         // Next, we need to describe what our vertex data looks like.
         // Hint: there isn't any!
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
@@ -303,8 +309,8 @@ impl RandomGarbage {
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
-            width: surface_parameters.resolution.width as f32,
-            height: surface_parameters.resolution.height as f32,
+            width: self.surface_parameters.resolution.width as f32,
+            height: self.surface_parameters.resolution.height as f32,
             min_depth: 0.0,
             max_depth: 0.0,
         };
@@ -314,7 +320,7 @@ impl RandomGarbage {
                 x: 0,
                 y: 0,
             },
-            extent: surface_parameters.resolution,
+            extent: self.surface_parameters.resolution,
         };
 
         let viewport_state = vk::PipelineViewportStateCreateInfo {
@@ -399,7 +405,7 @@ impl RandomGarbage {
         // Create a color attachment to use our swapchain in our render pass.
         let color_attachment = vk::AttachmentDescription {
             flags: Default::default(),
-            format: surface_parameters.format,
+            format: self.surface_parameters.format,
             samples: vk::SAMPLE_COUNT_1_BIT,
             load_op: vk::AttachmentLoadOp::Clear,
             store_op: vk::AttachmentStoreOp::Store,
@@ -488,8 +494,6 @@ impl RandomGarbage {
     }
 
     fn create_swapchain_framebuffers(&mut self) {
-        let surface_parameters = self.query_surface_parameters();
-
         // Create a framebuffer object for each image in our swapchain!
         self.swapchain_framebuffers = self.swapchain_image_views
             .iter()
@@ -501,8 +505,8 @@ impl RandomGarbage {
                     render_pass: self.render_pass,
                     attachment_count: 1,
                     p_attachments: &image_view,
-                    width: surface_parameters.resolution.width,
-                    height: surface_parameters.resolution.height,
+                    width: self.surface_parameters.resolution.width,
+                    height: self.surface_parameters.resolution.height,
                     layers: 1,
                 };
 
@@ -532,8 +536,6 @@ impl RandomGarbage {
     }
 
     fn create_command_buffers(&mut self) {
-        let surface_parameters = self.query_surface_parameters();
-
         let command_buffers_info = vk::CommandBufferAllocateInfo {
             s_type: vk::StructureType::CommandBufferAllocateInfo,
             p_next: ptr::null(),
@@ -576,7 +578,7 @@ impl RandomGarbage {
                         x: 0,
                         y: 0,
                     },
-                    extent: surface_parameters.resolution,
+                    extent: self.surface_parameters.resolution,
                 },
                 clear_value_count: 1,
                 p_clear_values: &clear_color,
@@ -773,8 +775,6 @@ fn main() {
                     quit = true;
                 },
                 winit::Event::WindowEvent { event: winit::WindowEvent::Resized(width, height), ..} => {
-                    println!("Window resized to {}, {}", width, height);
-
                     resize_to = Some((width, height))
                 },
                 _ => ()
@@ -783,6 +783,7 @@ fn main() {
 
         if let Some(dimensions) = resize_to {
             burgers.window_size = dimensions;
+            burgers.surface_parameters = RandomGarbage::query_surface_parameters(&burgers.context, dimensions);
             burgers.recreate_swapchain();
         }
 
@@ -794,12 +795,4 @@ fn main() {
     }
 
     burgers.cleanup();
-}
-
-struct SurfaceParameters {
-    resolution: vk::Extent2D,
-    format: vk::Format,
-    color_space: vk::ColorSpaceKHR,
-    swapchain_image_count: u32,
-    capabilities: vk::SurfaceCapabilitiesKHR
 }
