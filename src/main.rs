@@ -33,7 +33,7 @@ lazy_static! {
     static ref TRIANGLE_VERTICES: Vec<Vertex> = vec![
         Vertex {
             position: Vector2::new(0.0, -0.5),
-            color: Vector3::new(1.0, 0.0, 0.0),
+            color: Vector3::new(1.0, 0.0, 1.0),
         },
         Vertex {
             position: Vector2::new(0.5, 0.5),
@@ -811,6 +811,11 @@ impl TwoStrokeApp {
     fn recreate_swapchain(&mut self) {
         self.context.device.device_wait_idle()
             .expect("Unable to wait for device to idle!");
+
+        match self.window_size {
+            (0, _) | (_, 0) => return,
+            _ => (),
+        }
 
         self.cleanup_swapchain();
 
