@@ -13,12 +13,11 @@ This project is intended to be read from beginning to end. It has instructive co
 This project requires:
 * Stable Rust (tested with 1.24.1)
 * LunarG Vulkan SDK (tested with 1.0.68)
-	* Required for validation layers and `glslc` shader compiler
+	* Required for validation layers and `glslc` shader compiler used by `build.rs`
 
 Running the sample is as simple as:
 
 ```sh
-./build-shaders
 cargo run
 ```
 
