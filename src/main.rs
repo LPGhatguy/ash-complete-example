@@ -33,7 +33,7 @@ lazy_static! {
     static ref TRIANGLE_VERTICES: Vec<Vertex> = vec![
         Vertex {
             position: Vector2::new(0.0, -0.5),
-            color: Vector3::new(1.0, 0.0, 0.0),
+            color: Vector3::new(1.0, 1.0, 1.0),
         },
         Vertex {
             position: Vector2::new(0.5, 0.5),
@@ -550,26 +550,26 @@ impl TwoStrokeApp {
             .collect::<Vec<_>>();
     }
 
-    fn create_vertex_buffer(&mut self) {
+    fn create_buffer(&self, size: vk::DeviceSize, usage: vk::BufferUsageFlags, properties: vk::MemoryPropertyFlags) -> (vk::Buffer, vk::DeviceMemory) {
         let buffer_info = vk::BufferCreateInfo {
             s_type: vk::StructureType::BufferCreateInfo,
             p_next: ptr::null(),
             flags: vk::BufferCreateFlags::empty(),
-            size: (mem::size_of::<Vertex>() * TRIANGLE_VERTICES.len()) as u64,
-            usage: vk::BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            size,
+            usage,
             sharing_mode: vk::SharingMode::Exclusive,
             queue_family_index_count: 0,
             p_queue_family_indices: ptr::null(),
         };
 
-        self.vertex_buffer = unsafe {
+        let buffer = unsafe {
             self.context.device.create_buffer(&buffer_info, None)
-                .expect("Unable to create vertex buffer!")
+                .expect("Unable to create buffer!")
         };
 
-        let memory_requirements = self.context.device.get_buffer_memory_requirements(self.vertex_buffer);
+        let memory_requirements = self.context.device.get_buffer_memory_requirements(buffer);
 
-        let memory_type = self.find_memory_type(memory_requirements.memory_type_bits, vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        let memory_type = self.find_memory_type(memory_requirements.memory_type_bits, properties)
             .expect("Unable to find suitable memory type!");
 
         let alloc_info = vk::MemoryAllocateInfo {
@@ -579,10 +579,26 @@ impl TwoStrokeApp {
             memory_type_index: memory_type,
         };
 
-        self.vertex_buffer_memory = unsafe {
+        let memory = unsafe {
             self.context.device.allocate_memory(&alloc_info, None)
                 .expect("Unable to allocate memory!")
         };
+
+        (buffer, memory)
+    }
+
+    fn create_vertex_buffer(&mut self) {
+        let buffer_size = (mem::size_of::<Vertex>() * TRIANGLE_VERTICES.len()) as u64;
+        {
+            let (buffer, memory) = self.create_buffer(
+                buffer_size,
+                vk::BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            );
+
+            self.vertex_buffer = buffer;
+            self.vertex_buffer_memory = memory;
+        }
 
         unsafe {
             self.context.device.bind_buffer_memory(self.vertex_buffer, self.vertex_buffer_memory, 0)
@@ -590,7 +606,7 @@ impl TwoStrokeApp {
         }
 
         unsafe {
-            let mapped_memory = self.context.device.map_memory(self.vertex_buffer_memory, 0, memory_requirements.size, vk::MemoryMapFlags::empty())
+            let mapped_memory = self.context.device.map_memory(self.vertex_buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())
                 .expect("Unable to map memory!");
 
             ptr::copy(TRIANGLE_VERTICES.as_ptr(), mapped_memory as *mut _, TRIANGLE_VERTICES.len());
