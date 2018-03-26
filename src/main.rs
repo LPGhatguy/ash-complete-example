@@ -584,32 +584,106 @@ impl TwoStrokeApp {
                 .expect("Unable to allocate memory!")
         };
 
-        (buffer, memory)
-    }
-
-    fn create_vertex_buffer(&mut self) {
-        let (buffer, memory) = self.create_buffer(
-            (mem::size_of::<Vertex>() * TRIANGLE_VERTICES.len()) as u64,
-            vk::BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        );
-
         unsafe {
             self.context.device.bind_buffer_memory(buffer, memory, 0)
                 .expect("Unable to bind buffer memory!");
         }
 
+        (buffer, memory)
+    }
+
+    fn copy_buffer(&self, source: vk::Buffer, destination: vk::Buffer, size: vk::DeviceSize) {
+        let command_buffers_info = vk::CommandBufferAllocateInfo {
+            s_type: vk::StructureType::CommandBufferAllocateInfo,
+            p_next: ptr::null(),
+            command_pool: self.command_pool,
+            level: vk::CommandBufferLevel::Primary,
+            command_buffer_count: 1,
+        };
+
+        let command_buffer = unsafe {
+            self.context.device.allocate_command_buffers(&command_buffers_info)
+                .expect("Unable to allocate command buffers!")[0]
+        };
+
+        let begin_info = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::CommandBufferBeginInfo,
+            p_next: ptr::null(),
+            flags: vk::COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            p_inheritance_info: ptr::null(),
+        };
+
         unsafe {
-            let mapped_memory = self.context.device.map_memory(memory, 0, vk::VK_WHOLE_SIZE, vk::MemoryMapFlags::empty())
+            self.context.device.begin_command_buffer(command_buffer, &begin_info)
+                .expect("Unable to begin command buffer");
+
+            let copy_region = vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: 0,
+                size,
+            };
+            self.context.device.cmd_copy_buffer(command_buffer, source, destination, &[copy_region]);
+
+            self.context.device.end_command_buffer(command_buffer)
+                .expect("Unable to end command buffer");
+
+            let present_queue = self.context.device.get_device_queue(self.context.the_queue, 0);
+
+            let submit_info = vk::SubmitInfo {
+                s_type: vk::StructureType::SubmitInfo,
+                p_next: ptr::null(),
+                wait_semaphore_count: 0,
+                p_wait_semaphores: ptr::null(),
+                p_wait_dst_stage_mask: ptr::null(),
+                signal_semaphore_count: 0,
+                p_signal_semaphores: ptr::null(),
+                command_buffer_count: 1,
+                p_command_buffers: &command_buffer,
+            };
+
+            self.context.device.queue_submit(present_queue, &[submit_info], vk::Fence::null())
+                .expect("Unable to submit command buffer");
+
+            self.context.device.queue_wait_idle(present_queue)
+                .expect("Unable to wait for queue to idle");
+
+            self.context.device.free_command_buffers(self.command_pool, &[command_buffer]);
+        }
+    }
+
+    fn create_vertex_buffer(&mut self) {
+        let buffer_size = (mem::size_of::<Vertex>() * TRIANGLE_VERTICES.len()) as u64;
+
+        let (staging_buffer, staging_memory) = self.create_buffer(
+            buffer_size,
+            vk::BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+
+        unsafe {
+            let mapped_memory = self.context.device.map_memory(staging_memory, 0, vk::VK_WHOLE_SIZE, vk::MemoryMapFlags::empty())
                 .expect("Unable to map memory!");
 
             ptr::copy(TRIANGLE_VERTICES.as_ptr(), mapped_memory as *mut _, TRIANGLE_VERTICES.len());
 
-            self.context.device.unmap_memory(memory);
+            self.context.device.unmap_memory(staging_memory);
         }
 
-        self.vertex_buffer = buffer;
-        self.vertex_buffer_memory = memory;
+        let (vertex_buffer, vertex_memory) = self.create_buffer(
+            buffer_size,
+            vk::BUFFER_USAGE_TRANSFER_DST_BIT | vk::BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            vk::MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        );
+
+        self.copy_buffer(staging_buffer, vertex_buffer, buffer_size);
+
+        unsafe {
+            self.context.device.destroy_buffer(staging_buffer, None);
+            self.context.device.free_memory(staging_memory, None);
+        }
+
+        self.vertex_buffer = vertex_buffer;
+        self.vertex_buffer_memory = vertex_memory;
     }
 
     fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> Option<u32> {
@@ -880,9 +954,10 @@ fn main() {
 
     the_app.create_swapchain_framebuffers();
 
+    the_app.create_command_pool();
+
     the_app.create_vertex_buffer();
 
-    the_app.create_command_pool();
     the_app.create_command_buffers();
 
     the_app.create_semaphores();
