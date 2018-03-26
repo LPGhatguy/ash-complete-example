@@ -32,17 +32,25 @@ const SHADER_ENTRYPOINT_NAME: *const i8 = cstr!("main");
 lazy_static! {
     static ref TRIANGLE_VERTICES: Vec<Vertex> = vec![
         Vertex {
-            position: Vector2::new(0.0, -0.5),
+            position: Vector2::new(-0.5, -0.5),
             color: Vector3::new(1.0, 1.0, 1.0),
         },
         Vertex {
-            position: Vector2::new(0.5, 0.5),
+            position: Vector2::new(0.5, -0.5),
             color: Vector3::new(0.0, 1.0, 0.0),
         },
         Vertex {
-            position: Vector2::new(-0.5, 0.5),
+            position: Vector2::new(0.5, 0.5),
             color: Vector3::new(0.0, 0.0, 1.0),
         },
+        Vertex {
+            position: Vector2::new(-0.5, 0.5),
+            color: Vector3::new(1.0, 0.0, 0.0),
+        },
+    ];
+
+    static ref TRIANGLE_INDICES: Vec<u16> = vec![
+        0, 1, 2, 2, 3, 0,
     ];
 }
 
@@ -74,6 +82,8 @@ struct TwoStrokeApp {
 
     vertex_buffer: vk::Buffer,
     vertex_buffer_memory: vk::DeviceMemory,
+    index_buffer: vk::Buffer,
+    index_buffer_memory: vk::DeviceMemory,
 
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
@@ -106,6 +116,8 @@ impl TwoStrokeApp {
 
             vertex_buffer: vk::Buffer::null(),
             vertex_buffer_memory: vk::DeviceMemory::null(),
+            index_buffer: vk::Buffer::null(),
+            index_buffer_memory: vk::DeviceMemory::null(),
 
             command_pool: vk::CommandPool::null(),
             command_buffers: Vec::new(),
@@ -686,6 +698,41 @@ impl TwoStrokeApp {
         self.vertex_buffer_memory = vertex_memory;
     }
 
+    fn create_index_buffer(&mut self) {
+        let buffer_size = (mem::size_of::<u16>() * TRIANGLE_INDICES.len()) as u64;
+
+        let (staging_buffer, staging_memory) = self.create_buffer(
+            buffer_size,
+            vk::BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+
+        unsafe {
+            let mapped_memory = self.context.device.map_memory(staging_memory, 0, vk::VK_WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                .expect("Unable to map memory!");
+
+            ptr::copy(TRIANGLE_INDICES.as_ptr(), mapped_memory as *mut _, TRIANGLE_INDICES.len());
+
+            self.context.device.unmap_memory(staging_memory);
+        }
+
+        let (index_buffer, index_memory) = self.create_buffer(
+            buffer_size,
+            vk::BUFFER_USAGE_TRANSFER_DST_BIT | vk::BUFFER_USAGE_INDEX_BUFFER_BIT,
+            vk::MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        );
+
+        self.copy_buffer(staging_buffer, index_buffer, buffer_size);
+
+        unsafe {
+            self.context.device.destroy_buffer(staging_buffer, None);
+            self.context.device.free_memory(staging_memory, None);
+        }
+
+        self.index_buffer = index_buffer;
+        self.index_buffer_memory = index_memory;
+    }
+
     fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> Option<u32> {
         let memory_properties = self.context.instance.get_physical_device_memory_properties(self.context.physical_device);
 
@@ -773,13 +820,17 @@ impl TwoStrokeApp {
                 self.context.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::Graphics, self.graphics_pipeline);
 
                 self.context.device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.vertex_buffer], &[0]);
+                self.context.device.cmd_bind_index_buffer(command_buffer, self.index_buffer, 0, vk::IndexType::Uint16);
 
-                self.context.device.cmd_draw(command_buffer,
-                    3, // vertex_count
-                    1, // instance_count
-                    0, // first_vertex
-                    0, // first_instance
+                self.context.device.cmd_draw_indexed(
+                    command_buffer,
+                    TRIANGLE_INDICES.len() as u32, // index count
+                    1, // instance count
+                    0, // first index
+                    0, // index offset
+                    0, // instance offset
                 );
+
                 self.context.device.cmd_end_render_pass(command_buffer);
 
                 self.context.device.end_command_buffer(command_buffer)
@@ -930,6 +981,9 @@ impl TwoStrokeApp {
             self.context.device.destroy_buffer(self.vertex_buffer, None);
             self.context.device.free_memory(self.vertex_buffer_memory, None);
 
+            self.context.device.destroy_buffer(self.index_buffer, None);
+            self.context.device.free_memory(self.index_buffer_memory, None);
+
             self.context.device.destroy_command_pool(self.command_pool, None);
 
             for &shader_module in &self.shader_modules {
@@ -957,6 +1011,7 @@ fn main() {
     the_app.create_command_pool();
 
     the_app.create_vertex_buffer();
+    the_app.create_index_buffer();
 
     the_app.create_command_buffers();
 

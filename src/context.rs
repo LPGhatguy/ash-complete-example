@@ -166,7 +166,7 @@ fn create_window(width: u32, height: u32) -> (winit::Window, winit::EventsLoop) 
     // Construct a regular winit events loop and window; nothing special here.
     let events_loop = winit::EventsLoop::new();
     let window = winit::WindowBuilder::new()
-        .with_title("Ash Triangle")
+        .with_title("The Game")
         .with_dimensions(width, height)
         .build(&events_loop)
         .expect("Unable to construct winit window!");
