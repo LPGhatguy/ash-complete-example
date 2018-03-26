@@ -588,31 +588,28 @@ impl TwoStrokeApp {
     }
 
     fn create_vertex_buffer(&mut self) {
-        let buffer_size = (mem::size_of::<Vertex>() * TRIANGLE_VERTICES.len()) as u64;
-        {
-            let (buffer, memory) = self.create_buffer(
-                buffer_size,
-                vk::BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            );
-
-            self.vertex_buffer = buffer;
-            self.vertex_buffer_memory = memory;
-        }
+        let (buffer, memory) = self.create_buffer(
+            (mem::size_of::<Vertex>() * TRIANGLE_VERTICES.len()) as u64,
+            vk::BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
 
         unsafe {
-            self.context.device.bind_buffer_memory(self.vertex_buffer, self.vertex_buffer_memory, 0)
+            self.context.device.bind_buffer_memory(buffer, memory, 0)
                 .expect("Unable to bind buffer memory!");
         }
 
         unsafe {
-            let mapped_memory = self.context.device.map_memory(self.vertex_buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())
+            let mapped_memory = self.context.device.map_memory(memory, 0, vk::VK_WHOLE_SIZE, vk::MemoryMapFlags::empty())
                 .expect("Unable to map memory!");
 
             ptr::copy(TRIANGLE_VERTICES.as_ptr(), mapped_memory as *mut _, TRIANGLE_VERTICES.len());
 
-            self.context.device.unmap_memory(self.vertex_buffer_memory);
+            self.context.device.unmap_memory(memory);
         }
+
+        self.vertex_buffer = buffer;
+        self.vertex_buffer_memory = memory;
     }
 
     fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> Option<u32> {
