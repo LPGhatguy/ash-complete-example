@@ -17,7 +17,8 @@ use std::mem;
 use ash::vk;
 use ash::version::{DeviceV1_0, InstanceV1_0};
 
-use cgmath::{Vector2, Vector3};
+use cgmath::Transform;
+use cgmath::{Vector2, Vector3, Matrix4};
 
 use vertex::Vertex;
 use context::VulkanContext;
@@ -54,6 +55,14 @@ lazy_static! {
     ];
 }
 
+#[repr(C)]
+#[derive(Debug)]
+struct UniformBufferObject {
+    pub model: Matrix4<f32>,
+    pub view: Matrix4<f32>,
+    pub projection: Matrix4<f32>,
+}
+
 struct SurfaceParameters {
     resolution: vk::Extent2D,
     format: vk::Format,
@@ -74,6 +83,8 @@ struct TwoStrokeApp {
     shader_modules: Vec<vk::ShaderModule>,
     shader_stages: Vec<vk::PipelineShaderStageCreateInfo>,
 
+    descriptor_set_layout: vk::DescriptorSetLayout,
+
     pipeline_layout: vk::PipelineLayout,
     render_pass: vk::RenderPass,
     graphics_pipeline: vk::Pipeline,
@@ -84,6 +95,11 @@ struct TwoStrokeApp {
     vertex_buffer_memory: vk::DeviceMemory,
     index_buffer: vk::Buffer,
     index_buffer_memory: vk::DeviceMemory,
+    uniform_buffer: vk::Buffer,
+    uniform_buffer_memory: vk::DeviceMemory,
+
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_set: vk::DescriptorSet,
 
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
@@ -108,6 +124,8 @@ impl TwoStrokeApp {
             shader_modules: Vec::new(),
             shader_stages: Vec::new(),
 
+            descriptor_set_layout: vk::DescriptorSetLayout::null(),
+
             pipeline_layout: vk::PipelineLayout::null(),
             render_pass: vk::RenderPass::null(),
             graphics_pipeline: vk::Pipeline::null(),
@@ -118,6 +136,11 @@ impl TwoStrokeApp {
             vertex_buffer_memory: vk::DeviceMemory::null(),
             index_buffer: vk::Buffer::null(),
             index_buffer_memory: vk::DeviceMemory::null(),
+            uniform_buffer: vk::Buffer::null(),
+            uniform_buffer_memory: vk::DeviceMemory::null(),
+
+            descriptor_pool: vk::DescriptorPool::null(),
+            descriptor_set: vk::DescriptorSet::null(),
 
             command_pool: vk::CommandPool::null(),
             command_buffers: Vec::new(),
@@ -323,6 +346,88 @@ impl TwoStrokeApp {
         self.shader_stages = vec![vertex_stage_info, fragment_stage_info];
     }
 
+    fn create_descriptor_set_layout(&mut self) {
+        let ubo_layout_binding = vk::DescriptorSetLayoutBinding {
+            binding: 0,
+            descriptor_type: vk::DescriptorType::UniformBuffer,
+            descriptor_count: 1,
+            stage_flags: vk::SHADER_STAGE_VERTEX_BIT,
+            p_immutable_samplers: ptr::null(),
+        };
+
+        let layout_info = vk::DescriptorSetLayoutCreateInfo {
+            s_type: vk::StructureType::DescriptorSetLayoutCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            binding_count: 1,
+            p_bindings: &ubo_layout_binding,
+        };
+
+        self.descriptor_set_layout = unsafe {
+            self.context.device.create_descriptor_set_layout(&layout_info, None)
+                .expect("Unable to create descriptor set layout!")
+        };
+    }
+
+    fn create_descriptor_pool(&mut self) {
+        let pool_size = vk::DescriptorPoolSize {
+            typ: vk::DescriptorType::UniformBuffer,
+            descriptor_count: 1,
+        };
+
+        let pool_info = vk::DescriptorPoolCreateInfo {
+            s_type: vk::StructureType::DescriptorPoolCreateInfo,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            pool_size_count: 1,
+            p_pool_sizes: &pool_size,
+            max_sets: 1,
+        };
+
+        self.descriptor_pool = unsafe {
+            self.context.device.create_descriptor_pool(&pool_info, None)
+                .expect("Unable to create descriptor pool!")
+        };
+    }
+
+    fn create_descriptor_set(&mut self) {
+        let alloc_info = vk::DescriptorSetAllocateInfo {
+            s_type: vk::StructureType::DescriptorSetAllocateInfo,
+            p_next: ptr::null(),
+            descriptor_pool: self.descriptor_pool,
+            descriptor_set_count: 1,
+            p_set_layouts: &self.descriptor_set_layout,
+        };
+
+        self.descriptor_set = unsafe {
+            self.context.device.allocate_descriptor_sets(&alloc_info)
+                .expect("Unable to allocate descriptor sets")[0]
+        };
+
+        let buffer_info = vk::DescriptorBufferInfo {
+            buffer: self.uniform_buffer,
+            offset: 0,
+            range: mem::size_of::<UniformBufferObject>() as u64,
+        };
+
+        let descriptor_write = vk::WriteDescriptorSet {
+            s_type: vk::StructureType::WriteDescriptorSet,
+            p_next: ptr::null(),
+            dst_set: self.descriptor_set,
+            dst_binding: 0,
+            dst_array_element: 0,
+            descriptor_type: vk::DescriptorType::UniformBuffer,
+            descriptor_count: 1,
+            p_buffer_info: &buffer_info,
+            p_image_info: ptr::null(),
+            p_texel_buffer_view: ptr::null(),
+        };
+
+        unsafe {
+            self.context.device.update_descriptor_sets(&[descriptor_write], &[]);
+        }
+    }
+
     fn create_graphics_pipeline(&mut self) {
         // Next, we need to describe what our vertex data looks like.
         let binding_description = Vertex::get_binding_description();
@@ -433,8 +538,8 @@ impl TwoStrokeApp {
             s_type: vk::StructureType::PipelineLayoutCreateInfo,
             p_next: ptr::null(),
             flags: Default::default(),
-            set_layout_count: 0,
-            p_set_layouts: ptr::null(),
+            set_layout_count: 1,
+            p_set_layouts: &self.descriptor_set_layout,
             push_constant_range_count: 0,
             p_push_constant_ranges: ptr::null(),
         };
@@ -733,6 +838,19 @@ impl TwoStrokeApp {
         self.index_buffer_memory = index_memory;
     }
 
+    fn create_uniform_buffer(&mut self) {
+        let buffer_size = mem::size_of::<UniformBufferObject>() as u64;
+
+        let (buffer, memory) = self.create_buffer(
+            buffer_size,
+            vk::BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vk::MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk::MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+
+        self.uniform_buffer = buffer;
+        self.uniform_buffer_memory = memory;
+    }
+
     fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> Option<u32> {
         let memory_properties = self.context.instance.get_physical_device_memory_properties(self.context.physical_device);
 
@@ -819,6 +937,15 @@ impl TwoStrokeApp {
                 self.context.device.cmd_begin_render_pass(command_buffer, &render_pass_info, vk::SubpassContents::Inline);
                 self.context.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::Graphics, self.graphics_pipeline);
 
+                self.context.device.cmd_bind_descriptor_sets(
+                    command_buffer,
+                    vk::PipelineBindPoint::Graphics,
+                    self.pipeline_layout,
+                    0, // first set
+                    &[self.descriptor_set],
+                    &[], // dynamic offets
+                );
+
                 self.context.device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.vertex_buffer], &[0]);
                 self.context.device.cmd_bind_index_buffer(command_buffer, self.index_buffer, 0, vk::IndexType::Uint16);
 
@@ -855,6 +982,27 @@ impl TwoStrokeApp {
             self.context.device.create_semaphore(&semaphore_info, None)
                 .expect("Unable to create semaphore!")
         };
+    }
+
+    fn update_uniform_buffer(&mut self) {
+        let model = Matrix4::one();
+        let view = Matrix4::one();
+        let projection = Matrix4::one();
+
+        let ubo = UniformBufferObject {
+            model,
+            view,
+            projection,
+        };
+
+        unsafe {
+            let mapped_memory = self.context.device.map_memory(self.uniform_buffer_memory, 0, vk::VK_WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                .expect("Unable to map uniform memory!");
+
+            ptr::write(mapped_memory as *mut _, ubo);
+
+            self.context.device.unmap_memory(self.uniform_buffer_memory);
+        }
     }
 
     fn render_frame(&mut self) {
@@ -978,11 +1126,18 @@ impl TwoStrokeApp {
 
             self.cleanup_swapchain();
 
+            self.context.device.destroy_descriptor_pool(self.descriptor_pool, None);
+
+            self.context.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+
             self.context.device.destroy_buffer(self.vertex_buffer, None);
             self.context.device.free_memory(self.vertex_buffer_memory, None);
 
             self.context.device.destroy_buffer(self.index_buffer, None);
             self.context.device.free_memory(self.index_buffer_memory, None);
+
+            self.context.device.destroy_buffer(self.uniform_buffer, None);
+            self.context.device.free_memory(self.uniform_buffer_memory, None);
 
             self.context.device.destroy_command_pool(self.command_pool, None);
 
@@ -1004,6 +1159,8 @@ fn main() {
     the_app.create_swapchain_images();
     the_app.create_swapchain_image_views();
 
+    the_app.create_descriptor_set_layout();
+
     the_app.create_graphics_pipeline();
 
     the_app.create_swapchain_framebuffers();
@@ -1012,6 +1169,10 @@ fn main() {
 
     the_app.create_vertex_buffer();
     the_app.create_index_buffer();
+    the_app.create_uniform_buffer();
+
+    the_app.create_descriptor_pool();
+    the_app.create_descriptor_set();
 
     the_app.create_command_buffers();
 
@@ -1044,6 +1205,7 @@ fn main() {
             break;
         }
 
+        the_app.update_uniform_buffer();
         the_app.render_frame();
     }
 
