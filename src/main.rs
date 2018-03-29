@@ -10,14 +10,17 @@ mod cstr;
 mod context;
 mod vertex;
 
+use std::collections::HashSet;
 use std::default::Default;
 use std::ptr;
 use std::mem;
+use std::time::Instant;
 
 use ash::vk;
 use ash::version::{DeviceV1_0, InstanceV1_0};
 
-use cgmath::Transform;
+// I can't import prelude::* because Transform::one and One::one overlap >_<
+use cgmath::{Transform, Zero, InnerSpace};
 use cgmath::{Vector2, Vector3, Matrix4};
 
 use vertex::Vertex;
@@ -55,6 +58,23 @@ lazy_static! {
     ];
 }
 
+#[derive(Debug)]
+struct Camera {
+    pub position: Vector3<f32>,
+}
+
+impl Camera {
+    pub fn new() -> Camera {
+        Camera {
+            position: Vector3::zero(),
+        }
+    }
+
+    pub fn get_view_matrix(&self) -> Matrix4<f32> {
+        Matrix4::from_translation(self.position)
+    }
+}
+
 #[repr(C)]
 #[derive(Debug)]
 struct UniformBufferObject {
@@ -75,6 +95,8 @@ struct TwoStrokeApp {
     context: VulkanContext,
     window_size: (u32, u32),
     surface_parameters: SurfaceParameters,
+
+    camera: Camera,
 
     swapchain: vk::SwapchainKHR,
     swapchain_images: Vec<vk::Image>,
@@ -116,6 +138,8 @@ impl TwoStrokeApp {
             context,
             window_size,
             surface_parameters,
+
+            camera: Camera::new(),
 
             swapchain: vk::SwapchainKHR::null(),
             swapchain_images: Vec::new(),
@@ -986,8 +1010,18 @@ impl TwoStrokeApp {
 
     fn update_uniform_buffer(&mut self) {
         let model = Matrix4::one();
-        let view = Matrix4::one();
-        let projection = Matrix4::one();
+        let view = self.camera.get_view_matrix();
+        // let view = Matrix4::look_at(
+        //     Point3::new(0.0, 0.0, 5.0),
+        //     Point3::new(0.0, 0.0, 0.0),
+        //     Vector3::new(0.0, 1.0, 0.0),
+        // );
+        let projection = cgmath::perspective(
+            cgmath::Deg(45.0),
+            (self.window_size.0 as f32) / (self.window_size.1 as f32),
+            0.01,
+            1000.0
+        );
 
         let ubo = UniformBufferObject {
             model,
@@ -1153,6 +1187,8 @@ fn main() {
 
     let mut the_app = TwoStrokeApp::new(VulkanContext::new(), (window_width, window_height));
 
+    the_app.camera.position = Vector3::new(0.0, 0.0, -5.0);
+
     the_app.create_shaders();
 
     the_app.create_swapchain();
@@ -1178,8 +1214,18 @@ fn main() {
 
     the_app.create_semaphores();
 
+    let mut last_time = Instant::now();
+
+    let mut keys_down: HashSet<winit::VirtualKeyCode> = HashSet::new();
+
     // It's main loop time!
     loop {
+        let dt = {
+            let elapsed = last_time.elapsed();
+
+            (elapsed.as_secs() as f64) + (elapsed.subsec_nanos() as f64 / 1_000_000.0)
+        };
+
         let mut quit = false;
         let mut resize_to = None;
 
@@ -1190,6 +1236,17 @@ fn main() {
                 },
                 winit::Event::WindowEvent { event: winit::WindowEvent::Resized(width, height), ..} => {
                     resize_to = Some((width, height))
+                },
+                winit::Event::WindowEvent { event: winit::WindowEvent::KeyboardInput { input: winit::KeyboardInput { virtual_keycode, state, .. }, ..}, ..} => {
+                    match virtual_keycode {
+                        Some(keycode) => {
+                            match state {
+                                winit::ElementState::Pressed => keys_down.insert(keycode),
+                                winit::ElementState::Released => keys_down.remove(&keycode),
+                            };
+                       },
+                       None => (),
+                    }
                 },
                 _ => ()
             }
@@ -1205,8 +1262,34 @@ fn main() {
             break;
         }
 
+        {
+            let mut movement = Vector3::new(0.0, 0.0, 0.0);
+
+            if keys_down.contains(&winit::VirtualKeyCode::W) {
+                movement.z += 1.0;
+            }
+
+            if keys_down.contains(&winit::VirtualKeyCode::S) {
+                movement.z -= 1.0;
+            }
+
+            if keys_down.contains(&winit::VirtualKeyCode::D) {
+                movement.x -= 1.0;
+            }
+
+            if keys_down.contains(&winit::VirtualKeyCode::A) {
+                movement.x += 1.0;
+            }
+
+            if movement.magnitude() > 0.0 {
+                the_app.camera.position += movement.normalize_to(dt as f32 * 5.0);
+            }
+        }
+
         the_app.update_uniform_buffer();
         the_app.render_frame();
+
+        last_time = Instant::now();
     }
 
     the_app.cleanup();
