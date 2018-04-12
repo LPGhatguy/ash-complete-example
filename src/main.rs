@@ -10,6 +10,7 @@ mod cstr;
 mod context;
 mod vertex;
 
+use std::f32::consts::PI;
 use std::collections::HashSet;
 use std::default::Default;
 use std::ptr;
@@ -19,9 +20,8 @@ use std::time::Instant;
 use ash::vk;
 use ash::version::{DeviceV1_0, InstanceV1_0};
 
-// I can't import prelude::* because Transform::one and One::one overlap >_<
-use cgmath::{Transform, Zero, InnerSpace};
-use cgmath::{Vector2, Vector3, Matrix4};
+use cgmath::prelude::*;
+use cgmath::{Vector2, Vector3, Matrix4, Euler, Quaternion, Rad};
 
 use vertex::Vertex;
 use context::VulkanContext;
@@ -61,17 +61,33 @@ lazy_static! {
 #[derive(Debug)]
 struct Camera {
     pub position: Vector3<f32>,
+    pub pitch: f32,
+    pub yaw: f32,
 }
 
 impl Camera {
     pub fn new() -> Camera {
         Camera {
             position: Vector3::zero(),
+            pitch: 0.0,
+            yaw: 0.0,
         }
     }
 
+    pub fn get_orientation(&self) -> Quaternion<f32> {
+        Quaternion::from(Euler {
+            x: Rad(self.pitch),
+            y: Rad(-self.yaw),
+            z: Rad(0.0),
+        })
+    }
+
     pub fn get_view_matrix(&self) -> Matrix4<f32> {
-        Matrix4::from_translation(self.position)
+        Matrix4::from(Euler {
+            x: Rad(-self.pitch),
+            y: Rad(self.yaw),
+            z: Rad(0.0),
+        }) * Matrix4::from_translation(self.position)
     }
 }
 
@@ -1009,13 +1025,8 @@ impl TwoStrokeApp {
     }
 
     fn update_uniform_buffer(&mut self) {
-        let model = Matrix4::one();
+        let model = Matrix4::identity();
         let view = self.camera.get_view_matrix();
-        // let view = Matrix4::look_at(
-        //     Point3::new(0.0, 0.0, 5.0),
-        //     Point3::new(0.0, 0.0, 0.0),
-        //     Vector3::new(0.0, 1.0, 0.0),
-        // );
         let projection = cgmath::perspective(
             cgmath::Deg(45.0),
             (self.window_size.0 as f32) / (self.window_size.1 as f32),
@@ -1222,12 +1233,14 @@ fn main() {
     loop {
         let dt = {
             let elapsed = last_time.elapsed();
+            last_time = Instant::now();
 
-            (elapsed.as_secs() as f64) + (elapsed.subsec_nanos() as f64 / 1_000_000.0)
+            (elapsed.as_secs() as f64) + (elapsed.subsec_nanos() as f64 / 1_000_000_000.0)
         };
 
         let mut quit = false;
         let mut resize_to = None;
+        let mut mouse_movement = (0.0, 0.0);
 
         the_app.context.events_loop.poll_events(|event| {
             match event {
@@ -1248,9 +1261,16 @@ fn main() {
                        None => (),
                     }
                 },
+                winit::Event::DeviceEvent { event: winit::DeviceEvent::MouseMotion { delta }, .. } => {
+                    mouse_movement.0 += delta.0 as f32;
+                    mouse_movement.1 += delta.1 as f32;
+                },
                 _ => ()
             }
         });
+
+        the_app.camera.yaw = (the_app.camera.yaw + mouse_movement.0 / 750.0).max(-PI * 0.9).min(PI * 0.9);
+        the_app.camera.pitch += mouse_movement.1 / 750.0;
 
         if let Some(dimensions) = resize_to {
             the_app.window_size = dimensions;
@@ -1282,14 +1302,12 @@ fn main() {
             }
 
             if movement.magnitude() > 0.0 {
-                the_app.camera.position += movement.normalize_to(dt as f32 * 5.0);
+                the_app.camera.position += the_app.camera.get_orientation() * movement.normalize_to(dt as f32 * 5.0);
             }
         }
 
         the_app.update_uniform_buffer();
         the_app.render_frame();
-
-        last_time = Instant::now();
     }
 
     the_app.cleanup();
